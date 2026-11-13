@@ -1,0 +1,257 @@
+# WearTAK Ditto Plugin
+
+## Purpose and Capabilities
+
+Development-only Wear OS plugin scaffold for a future Ditto extraction. It exposes the
+WearTAK plugin lifecycle service but **does not start Ditto or provide mesh, CoT, chat,
+data exchange, settings, or provisioning**. It advertises no plugin capabilities and
+reports the runtime as unavailable.
+
+The watch is standalone; the ATAK Companion plugin is not required.
+
+## Status
+
+Not deployable. The user-selected application ID is `com.weartak.plugin.ditto`.
+Release builds are disabled. Debug builds use the standard local Android debug key;
+production signing, host authorization, and device integration remain unverified.
+The earlier `com.weartak.plugin.ditto.dev` package is a different Android application
+and cannot be updated in place by this package.
+
+The user intends to reuse the existing Ditto community identity. Its scope and secure
+provisioning path for this separate package remain unverified. No identity or PDL is
+included or loaded, and the runtime stays disabled until provisioning and safe ownership
+handoff are implemented.
+
+## Point of Contacts
+
+Undocumented.
+
+## Ports Required
+
+This scaffold declares no network permissions or listeners. Future Ditto networking
+requirements have not been established for the separate plugin.
+
+## Equipment Required
+
+Development requires JDK 17, Android SDK platform 34, and a verified combined WearTAK
+plugin SDK AAR and Gradle 8.10.2. A compatible Wear OS watch is required for eventual
+device validation.
+
+## Equipment Supported
+
+The manifest requires watch hardware and Android API 30 or later. No watch or host
+version has been validated.
+
+## Compilation
+
+The SDK AAR is not included. On Windows, the following obtains only the required
+tracked build inputs from canonical core commit
+`00290203f9a6bb09870c53f2cdac0e110ed88125` into a new temporary directory,
+then builds the combined SDK. It requires read access to
+[TAK.gov core](https://git.tak.gov/core/weartak-core/wearos-tak-civ),
+[GitHub SDK source](https://github.com/aegorsuch/weartak-plugin-sdk), Git, Python 3,
+JDK 17, Gradle 8.10.2, Android SDK platform 34, and `ANDROID_HOME` pointing to the Android SDK.
+Gradle and Maven dependencies may require network access. Configure Git credentials
+beforehand; do not put credentials in commands or this repository. Run from this
+plugin repository in PowerShell. Install Gradle separately and verify its distribution
+against the [published checksum](https://gradle.org/release-checksums/); the wrapper
+JAR is not included. The checked-in wrapper scripts require a locally generated wrapper
+JAR and are not used in the commands below.
+
+```powershell
+$ErrorActionPreference = 'Stop'
+function Invoke-CheckedGit {
+    & git @args
+    if ($LASTEXITCODE -ne 0) { throw 'Git command failed.' }
+}
+$root = Join-Path $env:TEMP ('wtd-sdk-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+if (Test-Path $root) { throw 'Temporary directory already exists.' }
+New-Item -ItemType Directory -Path $root | Out-Null
+$env:GIT_TERMINAL_PROMPT = '0'
+$commit = '00290203f9a6bb09870c53f2cdac0e110ed88125'
+Invoke-CheckedGit -C $root init --quiet
+Invoke-CheckedGit -C $root remote add origin 'https://git.tak.gov/core/weartak-core/wearos-tak-civ.git'
+Invoke-CheckedGit -C $root fetch --quiet --depth=1 --filter=blob:none origin $commit
+$objects = @(
+    'ci/build_plugin_sdk.py',
+    'ci/plugin-sdk.json',
+    'ci/plugin-sdk-transport/.gitattributes',
+    'ci/plugin-sdk-transport/overlay-source.sha256',
+    'ci/plugin-sdk-transport/transport-v1-overlay.zip'
+)
+foreach ($object in $objects) { Invoke-CheckedGit -C $root cat-file -e "${commit}:$object" }
+Invoke-CheckedGit -c core.autocrlf=false -C $root checkout $commit -- `
+    'ci\build_plugin_sdk.py' 'ci\plugin-sdk.json' 'ci\plugin-sdk-transport'
+Push-Location $root
+try {
+    python .\ci\build_plugin_sdk.py
+    if ($LASTEXITCODE -ne 0) { throw 'SDK build failed.' }
+} finally { Pop-Location }
+$aar = Join-Path $root '.gradle\sdk\86bdc8b04797-a818af15b332\build\outputs\aar\weartak-plugin-sdk-release.aar'
+if ((Get-FileHash $aar -Algorithm SHA256).Hash -ne '6ec84b18e1c8ac6b4be727083c4ea7a572150b521384270212434c239e5a1e0b') {
+    throw 'Unexpected SDK AAR hash.'
+}
+gradle :app:assembleDebug :app:testDebugUnitTest --offline --no-daemon --max-workers=2 `
+    '-Pkotlin.compiler.execution.strategy=in-process' "-PweartakPluginSdkAar=$aar" --console=plain
+if ($LASTEXITCODE -ne 0) { throw 'Plugin build or tests failed.' }
+```
+
+The [core builder](https://git.tak.gov/core/weartak-core/wearos-tak-civ/-/blob/00290203f9a6bb09870c53f2cdac0e110ed88125/ci/build_plugin_sdk.py)
+verifies SDK commit `86bdc8b04797c2cf6caa30e78e796abac1c2a330`, tree
+`a03d33bc077d81f80cdb53b04ea75e18cf0200a1`, overlay archive SHA-256
+`a51f54fbfc1c95a9583ac97daeec2f957fb42de87d27a9bbd823597184033ffd`, overlay
+inventory SHA-256 `a818af15b3328b817b972e2fe81d9585cb54e9a952a0ec8e13936ee5987ee6a6`,
+and the resulting AAR. The plugin also accepts the independently pinned Linux AAR
+hash `8f911b81ac85e691ad182097fe0ef0f00ffa0d2da3442d3d2f03c5ec2529184f`;
+Linux build steps have not been verified here. Use a short temporary path if Windows
+AIDL exceeds path limits. The offline plugin command requires cached dependencies;
+Robolectric may separately require its Android test runtime cache or network access.
+Do not commit the AAR, vendor binaries, credentials, signing keys, Ditto identity, or PDL.
+
+## Developer Notes
+
+The core currently uses Ditto `4.14.6`. Unit tests compile the separate SDK bridge
+source against that Maven Central SDK, but the debug APK contains neither the
+bridge nor the SDK and does not merge its mesh permissions. The debug APK cannot
+run Ditto. Device installation and class loading have not been verified.
+Core retains its existing Ditto runtime.
+The existing host SDK provides lifecycle, generic CoT/chat transport, route status,
+and hosted UI. It does not provide a native Ditto document/store,
+point-ledger, PDL migration, or host-owned mesh-runtime contract.
+
+An unwired lifecycle adapter permanently rejects start requests. The separately
+compiled SDK-backed stop bridge targets a caller-supplied Ditto instance and is
+excluded from the APK. Unit tests execute that bridge against a synthetic class,
+not the SDK runtime. As in core, each adapter marks stop requested under a lock
+before calling `stopSync()` and does not repeat the call after an error. It returns
+the recorded call outcome, unlike core's swallowed `DittoError`; that outcome is
+historical, not proof of current state. This is not an exclusive ownership lock.
+Callers must not
+log exception details that may contain sensitive data. A successful `stopSync()`
+return is not proof of quiescence or permission to hand off ownership. The adapter
+does not create an SDK instance, provision identity, register a transport, or start
+a radio. It does not close core's monitors, workers, observers, subscriptions or
+instance: those objects and their host ownership contracts do not exist here. It
+must not be wired until authenticated exclusive ownership, provisioning,
+and positive shutdown acknowledgement are established. Synthetic tests exercise
+the adapter's own behavior, not SDK or network behavior.
+
+Isolated, currently unwired v2 Ditto-to-CoT decoders validate and convert PLI,
+marker, emergency, and inbound native/extended chat documents. They reject malformed,
+oversized, and sensitive enrollment payloads. An unwired outbound chat encoder
+maps caller-supplied, privacy-filtered GeoChat and peer identity to native v2
+fields and validates the resulting document; it neither sends nor provisions.
+It rejects ambiguous structure, malformed or oversized XML, and sensitive
+enrollment commands, including in envelope fields. Extended chat also rejects
+conflicting callsign or parent values between its envelope and detail; core does
+not check those two fields. A separate, unwired chat
+freshness check rejects events more than five minutes in the future and drops
+events stale at or before caller-supplied current time. Decoding alone does not
+perform that check. Unlike core's implicit clock assumption, the check requires
+a positive, representable current time and a valid chat TTL. Unwired replay
+comparison and chat retention calculations mirror core's decisions and query
+strings but do not deliver, persist, subscribe, evict, or migrate state.
+They reject invalid watermark or clock inputs rather than assuming trusted state.
+Core records a replay watermark only after successful ingestion; a persistence
+failure after delivery can still cause redelivery. Safe integration requires an
+explicit delivery and durable-storage contract. Retention also requires persisted
+attempt ordering and exclusive subscription ownership before SDK eviction.
+Recipient delivery, mesh, and end-to-end interoperability are not implemented.
+An unwired mapitem/alert encoder maps explicit, privacy-filtered host inputs to
+core aliases. It validates the common v2/CoT envelope, restricts mapitem types to markers
+and routes and alert types to core emergency types, and does not encode generic
+deletions as tombstones. Unlike core's raw extraction it rejects blank or
+unsafe fields and requires explicit peer and author inputs. It does not verify
+type-specific detail semantics, authorization, point ownership, routing, or
+delivery; future marker writes must use the local owner ledger and retain
+pending tombstones. Returned documents contain sensitive data and must not be logged.
+Isolated point ledgers preserve owner/revision watermarks and pending tombstones;
+point ingress accepts only decoded, validated point objects.
+they are not connected to the service or migrated from core. Shared-key writer
+ownership is an application rule, not a cryptographic signature. Local ledger changes expose a coroutine state flow and generation counter.
+An unwired retry job uses the local ledger, core's backoff and an explicit
+caller-supplied allowed flow. Cancellation stops pending timers but does not
+prove that an in-flight write stopped; a future integration must serialize and
+recheck actual ownership and write authorization. Each ledger
+requires an exclusively owned preferences file and a single active instance;
+handoff and migration of core's ledgers and separate replay journal are not implemented.
+Local point documents are stored in private app preferences, not encrypted by
+these classes; future integration must assess storage and deletion requirements.
+An unwired track publication gate mirrors core's heartbeat, movement and
+meaningful-change decisions. The host must provide privacy-filtered identity,
+physiology, fresh valid location and a monotonic clock, and serialize gate checks
+with confirmed writes. The gate neither publishes nor provides permission,
+freshness, ownership-handoff, or delivery guarantees.
+Unlike core's internal gate, this isolated entry point rejects invalid coordinates
+and negative elapsed time, snapshots the identity list after acknowledgement,
+and redacts sample diagnostics instead of displaying track inputs.
+An unwired native track encoder and expiry helper reproduce core's document
+aliases, location defaults, old-fix marker, and expiry timestamp updates. The
+caller must supply already-filtered, mutually consistent identity, full CoT
+detail, timestamps, location, and stale policy. Encoding does not verify
+permission, freshness, delivery, or ownership. Unlike core's trusted internal
+builder, this encoder rejects invalid identity or timestamps, non-finite
+coordinates, altitude or speed, infinite CE/LE, malformed or oversized detail
+or final CoT, and sensitive enrollment commands. Null or NaN CE/LE use core's sentinel.
+It requires a closing `</detail>` tag and no preexisting
+`weartak_location` element. Marker insertion targets the closing root rather
+than replacing matching text inside comments or CDATA. Expiry is a shallow copy
+of a trusted track and requires a caller-supplied valid current time. Neither
+helper constructs host-owned detail or migrates/publishes tracks. Unlike core,
+expiry rejects zero, negative, and unrepresentable timestamps.
+Core and a future plugin can both receive generic outbound chat, markers, and
+emergencies; avoid registering plugin transport until runtime ownership and
+handoff prevent duplicate publication.
+
+The separate Android package does not inherit core's mesh permissions or DataStore
+configuration. Before any runtime can be enabled, establish secure community identity
+and PDL provisioning/migration, permission handling, host contracts, and lifecycle ownership.
+No placeholder credentials or default PDL are provided.
+
+The service action and signature-level bind permission follow the
+[WearTAK plugin template](https://git.tak.gov/weartak-plugins/weartak-plugin-template)
+at commit `a4af9f1b9bd015310743a6b0aef4bb0b24d65bf6`. A host connection alone
+does not mean Ditto is available. Service startup deliberately leaves the SDK lifecycle
+outside `RUNNING`; settings writes fail explicitly.
+
+Initialization checks the Binder caller UID against the claimed UID and package,
+requires that package to hold the bind permission and share the plugin's signing
+identity, and checks that the permission itself is signature-protected and defined
+by a package with that signing identity. Subsequent calls recheck the authenticated
+UID, package, permission and signature. Before initialization only inert getters
+and callback registration by a similarly trusted caller are accepted; the callback
+is not retained. Unbind or service destruction invalidates the old Binder handle.
+An unbind on any distinct binding intent may invalidate other clients' handles;
+they must reconnect. There is no package allowlist: any same-signing-identity package
+with the permission is trusted, and packages sharing a UID cannot be distinguished
+as Binder callers. These checks do not prove host process identity, exclusive
+ownership, provisioning, or shutdown. Android package visibility, permission grants,
+signing lineage, real host handshake order and reconnect behavior need device
+validation; different debug/production keys can prevent binding or initialization.
+The session is UID/package-scoped, not process-scoped: host process death or restart
+alone is not detected, and there is no Binder death-linked ownership lease.
+The coordinating core session verified current `PluginConnection.initialize` ordering:
+`getPluginInfo`, `getApiVersion`, `initializePluginV2` or `initializePluginV3`
+(with the host package and process UID), `registerHostCallback`, `startPlugin`,
+host-side `activateBinding`, then `settingsCoordinator.onPluginConnected`. The
+corresponding plugin-call sequence is covered by synthetic tests; the host-side
+steps and device interoperability are not verified by those tests.
+
+## License
+
+Original project code is licensed under GPL-3.0-or-later; see [LICENSE](LICENSE).
+The document decoders and encoders, replay and retention policies, XML helpers,
+point ledgers, track gate, retry job, and lifecycle stop ordering are adapted from WearTAK core at commit
+`00290203f9a6bb09870c53f2cdac0e110ed88125` and are GPL-3.0-only. Their source
+files identify that license; the combined work must respect those terms.
+The Gradle wrapper scripts come from the template and retain their Apache-2.0 notices;
+the wrapper JAR is not included.
+Kotlin coroutines are Apache-2.0 licensed; the license is included in
+`app/src/main/assets/licenses/apache-2.0.txt`.
+The externally built WearTAK SDK and Ditto SDK retain their own terms; this repository
+does not grant redistribution rights for them. The
+[Ditto Binary License](https://www.ditto.com/sdk-license) is reproduced in
+`app/src/main/assets/licenses/ditto-binary-license.txt`. The user confirmed the
+separate plugin agreement and GPL compatibility; written terms were not independently
+reviewed. Preserve all applicable third-party notices before distributing any future
+build.
