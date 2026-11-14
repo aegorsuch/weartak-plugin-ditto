@@ -27,9 +27,6 @@ CORE_ROOT="$WORK_ROOT/core"
 mkdir -p "$CORE_ROOT"
 git -C "$CORE_ROOT" init --quiet
 git -C "$CORE_ROOT" remote add origin "$CORE_REPOSITORY"
-GIT_ASKPASS="$ASKPASS" GIT_TERMINAL_PROMPT=0 \
-    git -C "$CORE_ROOT" fetch --quiet --depth=1 --filter=blob:none origin "$CORE_BUILDER_COMMIT"
-unset CI_JOB_TOKEN
 
 INPUTS="
 ci/build_plugin_sdk.sh
@@ -38,10 +35,17 @@ ci/plugin-sdk-transport/.gitattributes
 ci/plugin-sdk-transport/overlay-source.sha256
 ci/plugin-sdk-transport/transport-v1-overlay.zip
 "
-for path in $INPUTS; do
-    git -C "$CORE_ROOT" cat-file -e "$CORE_BUILDER_COMMIT:$path"
-done
-git -C "$CORE_ROOT" -c core.autocrlf=false checkout "$CORE_BUILDER_COMMIT" -- $INPUTS
+(
+    export GIT_ASKPASS="$ASKPASS" GIT_TERMINAL_PROMPT=0
+    echo "Fetching pinned core SDK build inputs" >&2
+    git -C "$CORE_ROOT" fetch --quiet --depth=1 --filter=blob:none origin "$CORE_BUILDER_COMMIT"
+    echo "Materializing pinned core SDK build inputs" >&2
+    for path in $INPUTS; do
+        git -C "$CORE_ROOT" cat-file -e "$CORE_BUILDER_COMMIT:$path"
+    done
+    git -C "$CORE_ROOT" -c core.autocrlf=false checkout "$CORE_BUILDER_COMMIT" -- $INPUTS
+)
+unset CI_JOB_TOKEN
 
 (
     cd "$CORE_ROOT"
