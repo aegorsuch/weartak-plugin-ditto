@@ -1,0 +1,26 @@
+<resources>
+    <string name="group_title">Ditto groups</string>
+    <string name="group_inactive_notice">Local groups only. Ditto is not running. Other routes are not private.</string>
+    <string name="group_loading">Loading local groups...</string>
+    <string name="group_local_only">Selection is local. No mesh is active.</string>
+    <string name="group_name_hint">Group name</string>
+    <string name="group_create">Create and select</string>
+    <string name="group_import">Import invitation</string>
+    <string name="group_export">Export invitation</string>
+    <string name="group_import_title">Protect invitation</string>
+    <string name="group_import_warning">An invitation contains the group key. Choose only a trusted file. The file provider can access it.</string>
+    <string name="group_choose_file">Choose file</string>
+    <string name="group_import_unavailable">File picker unavailable on this watch.</string>
+    <string name="group_import_error">Could not read invitation.</string>
+    <string name="group_export_title">Export group key?</string>
+    <string name="group_export_warning">This file contains the group key. Anyone with it can read and impersonate group members. The chosen provider may upload it. Use only a trusted destination.</string>
+    <string name="group_choose_destination">Choose destination</string>
+    <string name="group_export_select">Select a private group first.</string>
+    <string name="group_export_unavailable">File picker unavailable on this watch.</string>
+    <string name="group_export_error">Export failed. Treat any partial file as sensitive.</string>
+    <string name="group_export_success">Invitation saved. Protect the file.</string>
+    <string name="group_input_error">Invalid group name or invitation.</string>
+    <string name="group_storage_error">Group storage unavailable. No change was confirmed.</string>
+    <string name="group_active">Active: %1$s</string>
+    <string name="group_select">Use %1$s</string>
+</resources>

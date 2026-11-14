@@ -9,11 +9,22 @@ import android.content.pm.PermissionInfo
 import android.content.pm.Signature
 import android.os.Binder
 import android.os.Bundle
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.widget.Button
+import com.weartak.plugin.ditto.group.GroupBlobStore
+import com.weartak.plugin.ditto.group.GroupSettings
+import com.weartak.plugin.ditto.group.PrivateGroups
 import com.weartak.plugin.sdk.WearTakPluginContract
 import com.weartak.plugin.sdk.aidl.IWearTakHostCallback
+import com.weartak.plugin.sdk.lifecycle.PluginLifecycleEvent
+import com.weartak.plugin.sdk.lifecycle.PluginLifecycleMachine
 import com.weartak.plugin.sdk.model.PluginInitParcel
 import com.weartak.plugin.sdk.model.PluginLifecycleState
 import com.weartak.plugin.sdk.model.SettingsApplyMode
+import com.weartak.plugin.sdk.validation.ContractValidationResult
+import com.weartak.plugin.sdk.validation.SettingsSchemaContractValidator
 import org.junit.Assert.*
 import org.junit.After
 import org.junit.Test
@@ -23,6 +34,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowBinder
+import javax.crypto.spec.SecretKeySpec
 
 @RunWith(RobolectricTestRunner::class)
 class DittoPluginServiceTest {
@@ -30,9 +42,20 @@ class DittoPluginServiceTest {
     private val otherUid = 12346
     private val hostPackage = "example.host"
 
-    private fun boundBinder(): DittoPluginBinder {
+    private fun boundBinder(groups: PrivateGroups? = null): DittoPluginBinder {
+        if (groups != null) {
+            val lifecycle = PluginLifecycleMachine()
+            lifecycle.dispatch(PluginLifecycleEvent.BIND_ATTACHED)
+            return DittoPluginBinder(RuntimeEnvironment.getApplication(), lifecycle) { groups }
+        }
         val service = Robolectric.buildService(DittoPluginService::class.java).create().get()
         return service.onBind(Intent(WearTakPluginContract.ACTION_PLUGIN_SERVICE)) as DittoPluginBinder
+    }
+
+    private class TestGroupStorage : GroupBlobStore {
+        private var value: ByteArray? = null
+        override fun read(): ByteArray? = value?.copyOf()
+        override fun write(bytes: ByteArray) { value = bytes.copyOf() }
     }
 
     @Suppress("DEPRECATION")
@@ -73,6 +96,14 @@ class DittoPluginServiceTest {
         )
         assertTrue(info.exported)
         assertEquals(WearTakPluginContract.PERMISSION_BIND_PLUGIN, info.permission)
+        val activity = app.packageManager.getActivityInfo(
+            ComponentName(app, GroupActivity::class.java), 0,
+        )
+        assertTrue(activity.exported)
+        assertEquals(WearTakPluginContract.PERMISSION_BIND_PLUGIN, activity.permission)
+        val launch = app.packageManager.getLaunchIntentForPackage(app.packageName)
+        assertNotNull(launch)
+        assertEquals(Intent.ACTION_MAIN, launch!!.action)
         val permission = app.packageManager.getPermissionInfo(info.permission, 0)
         assertEquals(
             PermissionInfo.PROTECTION_SIGNATURE,
@@ -103,6 +134,34 @@ class DittoPluginServiceTest {
     }
 
     @Test
+    fun `group screen protects its window and exposes local controls`() {
+        val restored = Bundle().apply {
+            putString("pendingImportName", "Lake")
+            putString("waitingForExport", "a".repeat(32))
+        }
+        val controller = Robolectric.buildActivity(GroupActivity::class.java).create(restored)
+        try {
+            val activity = controller.get()
+            assertTrue(activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
+            fun buttons(view: View): List<String> = when (view) {
+                is Button -> listOf(view.text.toString())
+                is ViewGroup -> (0 until view.childCount).flatMap { buttons(view.getChildAt(it)) }
+                else -> emptyList()
+            }
+            val labels = buttons(activity.findViewById(android.R.id.content))
+            assertTrue(labels.contains(activity.getString(R.string.group_create)))
+            assertTrue(labels.contains(activity.getString(R.string.group_import)))
+            assertTrue(labels.contains(activity.getString(R.string.group_export)))
+            val saved = Bundle()
+            controller.saveInstanceState(saved)
+            assertEquals("Lake", saved.getString("pendingImportName"))
+            assertEquals("a".repeat(32), saved.getString("waitingForExport"))
+        } finally {
+            controller.destroy()
+        }
+    }
+
+    @Test
     fun `valid host initialization never starts unavailable transport`() {
         installCaller(hostPackage, hostUid)
         ShadowBinder.setCallingUid(hostUid)
@@ -110,7 +169,8 @@ class DittoPluginServiceTest {
         assertEquals("com.weartak.plugin.ditto", RuntimeEnvironment.getApplication().packageName)
         assertEquals(BuildConfig.APPLICATION_ID, binder.getPluginInfo().pluginId)
         assertEquals(BuildConfig.APPLICATION_ID, binder.getPluginInfo().packageName)
-        assertEquals(com.weartak.plugin.sdk.model.PluginCapabilitiesParcel(), binder.getCapabilities())
+        assertTrue(binder.getCapabilities().externalSettingsActivity)
+        assertFalse(binder.getCapabilities().hostedMainUi)
         binder.initializePluginV3(init(), null, null, null)
         binder.startPlugin()
         assertEquals(PluginLifecycleState.READY, binder.getStatus().state)
@@ -144,7 +204,8 @@ class DittoPluginServiceTest {
     fun `invalid initialization and settings fail closed`() {
         installCaller(hostPackage, hostUid)
         ShadowBinder.setCallingUid(hostUid)
-        val binder = boundBinder()
+        val groups = PrivateGroups.open(TestGroupStorage(), SecretKeySpec(ByteArray(32) { 2 }, "AES"))
+        val binder = boundBinder(groups)
         assertThrows(SecurityException::class.java) { binder.initializePluginV2(null, null, null) }
         assertThrows(SecurityException::class.java) {
             binder.initializePluginV2(PluginInitParcel(hostPackage, hostUid, ""), null, null)
@@ -159,10 +220,45 @@ class DittoPluginServiceTest {
             binder.applySettingsWithResult(Bundle(), SettingsApplyMode.PARTIAL_PATCH)
         }
         binder.initializePluginV2(init(), null, null)
-        val result = binder.applySettingsWithResult(Bundle(), SettingsApplyMode.PARTIAL_PATCH)
+        val result = binder.applySettingsWithResult(
+            Bundle().apply { putString(GroupSettings.GROUP_FIELD, "unknown") },
+            SettingsApplyMode.PARTIAL_PATCH,
+        )
         assertFalse(result.success)
-        assertEquals("UNAVAILABLE", result.errors.single().code)
-        assertTrue(binder.getSettingsSchema().fields.isEmpty())
+        assertEquals("INVALID_SETTINGS", result.errors.single().code)
+        assertEquals("community", binder.getSettingsValues().getString(GroupSettings.GROUP_FIELD))
+    }
+
+    @Test
+    fun `authenticated hosted selection persists and never exposes membership key`() {
+        installCaller(hostPackage, hostUid)
+        installCaller("example.other", otherUid)
+        ShadowBinder.setCallingUid(hostUid)
+        val storage = TestGroupStorage()
+        val wrappingKey = SecretKeySpec(ByteArray(32) { 2 }, "AES")
+        val groups = PrivateGroups.open(storage, wrappingKey)
+        groups.importMembership("SpringLake", ByteArray(16) { 1 }, ByteArray(32) { 3 })
+        val groupId = groups.options().last().id
+        val binder = boundBinder(groups)
+        binder.initializePluginV2(init(), null, null)
+        val schema = binder.getSettingsSchema()
+        assertTrue(SettingsSchemaContractValidator.validate(schema) is ContractValidationResult.Ok)
+        assertEquals(setOf("community", groupId), schema.fields.single().options.map { it.value }.toSet())
+        val result = binder.applySettingsWithResult(
+            Bundle().apply { putString(GroupSettings.GROUP_FIELD, groupId) },
+            SettingsApplyMode.PARTIAL_PATCH,
+        )
+        assertTrue(result.success)
+        assertEquals(setOf(GroupSettings.GROUP_FIELD), result.values.keySet())
+        assertEquals(groupId, PrivateGroups.open(storage, wrappingKey).selected())
+        ShadowBinder.setCallingUid(otherUid)
+        assertThrows(SecurityException::class.java) {
+            binder.applySettingsWithResult(
+                Bundle().apply { putString(GroupSettings.GROUP_FIELD, "community") },
+                SettingsApplyMode.PARTIAL_PATCH,
+            )
+        }
+        assertEquals(groupId, groups.selected())
     }
 
     @Test

@@ -6,6 +6,8 @@ import android.content.pm.PermissionInfo
 import android.os.Binder
 import android.os.Bundle
 import android.util.Log
+import com.weartak.plugin.ditto.group.GroupSettings
+import com.weartak.plugin.ditto.group.PrivateGroups
 import com.weartak.plugin.sdk.WearTakPluginContract
 import com.weartak.plugin.sdk.aidl.IWearTakHostCallback
 import com.weartak.plugin.sdk.aidl.IWearTakPlugin
@@ -21,19 +23,22 @@ import com.weartak.plugin.sdk.model.PluginMainUiSchemaParcel
 import com.weartak.plugin.sdk.model.PluginStatusParcel
 import com.weartak.plugin.sdk.model.SettingsApplyResultParcel
 import com.weartak.plugin.sdk.model.SettingsSchemaParcel
-import com.weartak.plugin.sdk.model.SettingsValidationErrorParcel
 import com.weartak.plugin.sdk.v2.aidl.IWearTakPluginHostControlV2
 import com.weartak.plugin.sdk.v3.aidl.IWearTakPluginHostControlV3
 import com.weartak.plugin.sdk.validation.ContractValidationResult
 import com.weartak.plugin.sdk.validation.PluginMetadataValidator
+import java.io.IOException
+import java.security.GeneralSecurityException
 
 internal class DittoPluginBinder(
     private val context: Context,
     private val lifecycle: PluginLifecycleMachine,
+    groupFactory: () -> PrivateGroups = { PrivateGroups.forApp(context) },
 ) : IWearTakPlugin.Stub() {
     private val lock = Any()
     private var closed = false
     private var host: Host? = null
+    private val groupSettings by lazy { GroupSettings(groupFactory()) }
 
     private data class Host(val uid: Int, val packageName: String)
 
@@ -47,7 +52,9 @@ internal class DittoPluginBinder(
         )
     }
 
-    override fun getCapabilities() = bootstrapRead { PluginCapabilitiesParcel() }
+    override fun getCapabilities() = bootstrapRead {
+        PluginCapabilitiesParcel(externalSettingsActivity = true)
+    }
     override fun getApiVersion() = bootstrapRead { WearTakPluginContract.CONTRACT_API_VERSION }
     override fun getStatus() = bootstrapRead { PluginStatusParcel(lifecycle.snapshot(), UNAVAILABLE) }
 
@@ -122,21 +129,23 @@ internal class DittoPluginBinder(
     }
 
     override fun unregisterHostCallback(callback: IWearTakHostCallback?) = withHost { Unit }
-    override fun getSettingsSchema() = bootstrapRead { SettingsSchemaParcel() }
-    override fun getSettingsValues() = bootstrapRead { Bundle() }
+    override fun getSettingsSchema() = bootstrapRead {
+        if (host == null) SettingsSchemaParcel() else readGroupSettings { it.schema() }
+    }
+    override fun getSettingsValues() = bootstrapRead {
+        if (host == null) Bundle() else readGroupSettings { it.values() }
+    }
     override fun onHostSettingsChanged(hostSettings: HostSettingsParcel?) = withHost { Unit }
 
     override fun applySettings(values: Bundle?) = withHost {
-        Log.w(TAG, "Settings unavailable")
+        if (!applyGroupSettings(values, com.weartak.plugin.sdk.model.SettingsApplyMode.PARTIAL_PATCH).success) {
+            Log.w(TAG, "Group settings could not be applied")
+        }
         Unit
     }
 
     override fun applySettingsWithResult(values: Bundle?, applyMode: Int) = withHost {
-        SettingsApplyResultParcel(
-            success = false,
-            applyMode = applyMode,
-            errors = listOf(SettingsValidationErrorParcel(code = "UNAVAILABLE", message = UNAVAILABLE)),
-        )
+        applyGroupSettings(values, applyMode)
     }
 
     override fun getMainUiSchema() = bootstrapRead { PluginMainUiSchemaParcel() }
@@ -191,6 +200,30 @@ internal class DittoPluginBinder(
     private inline fun <T> withHost(block: () -> T): T = synchronized(lock) {
         requireHost()
         block()
+    }
+
+    private fun applyGroupSettings(values: Bundle?, mode: Int): SettingsApplyResultParcel = try {
+        groupSettings.apply(values, mode)
+    } catch (_: GeneralSecurityException) {
+        GroupSettings.failure(mode, "GROUP_STORAGE_UNAVAILABLE", "Private group storage unavailable")
+    } catch (_: IOException) {
+        GroupSettings.failure(mode, "GROUP_STORAGE_UNAVAILABLE", "Private group storage unavailable")
+    } catch (_: IllegalStateException) {
+        GroupSettings.failure(mode, "GROUP_STORAGE_UNAVAILABLE", "Private group storage unavailable")
+    } catch (_: SecurityException) {
+        GroupSettings.failure(mode, "GROUP_STORAGE_UNAVAILABLE", "Private group storage unavailable")
+    }
+
+    private inline fun <T> readGroupSettings(block: (GroupSettings) -> T): T = try {
+        block(groupSettings)
+    } catch (_: GeneralSecurityException) {
+        throw IllegalStateException("Private group storage unavailable")
+    } catch (_: IOException) {
+        throw IllegalStateException("Private group storage unavailable")
+    } catch (_: IllegalStateException) {
+        throw IllegalStateException("Private group storage unavailable")
+    } catch (_: SecurityException) {
+        throw IllegalStateException("Private group storage unavailable")
     }
 
     private fun dispatch(event: PluginLifecycleEvent) {

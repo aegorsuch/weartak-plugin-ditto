@@ -4,16 +4,18 @@
 
 Development-only Wear OS plugin scaffold for a future Ditto extraction. It exposes the
 WearTAK plugin lifecycle service but **does not start Ditto or provide mesh, CoT, chat,
-data exchange, settings, or provisioning**. It advertises no plugin capabilities and
-reports the runtime as unavailable.
+data exchange, or provisioning**. A plugin-owned watch screen provides local group
+controls; the runtime remains unavailable.
 
 The watch is standalone; the ATAK Companion plugin is not required.
 
 ## Status
 
 Not deployable. The user-selected application ID is `com.weartak.plugin.ditto`.
-Release builds are disabled. Debug builds use the standard local Android debug key;
-production signing, host authorization, and device integration remain unverified.
+Release builds are non-debuggable. Local builds without all authorized CI signing
+inputs are intentionally unsigned and cannot be installed. Debug builds use the
+standard local Android debug key. Host permission grants and device integration remain
+unverified; do not use the debug signer for a release trial.
 The earlier `com.weartak.plugin.ditto.dev` package is a different Android application
 and cannot be updated in place by this package.
 
@@ -91,10 +93,31 @@ $aar = Join-Path $root '.gradle\sdk\86bdc8b04797-a818af15b332\build\outputs\aar\
 if ((Get-FileHash $aar -Algorithm SHA256).Hash -ne '6ec84b18e1c8ac6b4be727083c4ea7a572150b521384270212434c239e5a1e0b') {
     throw 'Unexpected SDK AAR hash.'
 }
-gradle :app:assembleDebug :app:testDebugUnitTest --offline --no-daemon --max-workers=2 `
+gradle :app:assembleDebug :app:testDebugUnitTest :app:assembleRelease :app:testReleaseUnitTest `
+    :app:verifyReleaseSigning `
+    --offline --no-daemon --max-workers=2 `
     '-Pkotlin.compiler.execution.strategy=in-process' "-PweartakPluginSdkAar=$aar" --console=plain
 if ($LASTEXITCODE -ne 0) { throw 'Plugin build or tests failed.' }
 ```
+
+The canonical core release signer is pinned to SHA-256
+`1579b600cd84e619e76a91c2db6b031938c999bc2aad926b9a51ec2b166d348d`. In the
+authorized protected CI environment, the release build consumes these existing
+variables: `WEARTAK_RELEASE_KEYSTORE_B64`, `RELEASE_STORE_PASSWORD`,
+`RELEASE_KEY_ALIAS`, and `RELEASE_KEY_PASSWORD`. All must be present; partial
+configuration fails. The base64 keystore is written only to a private POSIX
+temporary file, cleared from memory after writing, and deleted at build completion.
+`:app:verifyReleaseSigning` checks the resulting APK against the pinned certificate;
+CI release builds fail if signing inputs are absent or the verifier is not requested.
+No secret values or key files belong in this repository.
+
+Without signing inputs, the local release output is
+`app/build/outputs/apk/release/app-release-unsigned.apk`. It is explicitly verified
+as unsigned and cannot be installed. An installable UI trial still requires the
+plugin project’s authorized CI to receive the protected variables, run
+`:app:verifyReleaseSigning`, and produce a signer Android accepts as matching the
+installed core. The core must also hold `com.weartak.plugin.permission.BIND_PLUGIN`;
+the plugin enforces this signature permission on both its service and group activity.
 
 The [core builder](https://git.tak.gov/core/weartak-core/wearos-tak-civ/-/blob/00290203f9a6bb09870c53f2cdac0e110ed88125/ci/build_plugin_sdk.py)
 verifies SDK commit `86bdc8b04797c2cf6caa30e78e796abac1c2a330`, tree
@@ -135,6 +158,62 @@ instance: those objects and their host ownership contracts do not exist here. It
 must not be wired until authenticated exclusive ownership, provisioning,
 and positive shutdown acknowledgement are established. Synthetic tests exercise
 the adapter's own behavior, not SDK or network behavior.
+
+Local group groundwork stores a single Community/private selection and memberships
+in an authenticated encrypted, app-private no-backup file, wrapped by an Android
+Keystore AES key. A missing key, invalid file, or failed write fails closed rather
+than selecting Community. Group IDs are opaque and independent of display names.
+Authenticated host settings expose group names and IDs, not keys.
+
+The signature-permission-protected launcher activity provides watch-local creation,
+selection, invitation import and deliberate export. Core currently falls back to
+`getLaunchIntentForPackage` when hosted main UI is unavailable; settings capability
+flags do not select the activity route. The document picker may be unavailable.
+Invitations contain the group key: export requires a warning and destination choice,
+and import warns that the provider can access it. A selected provider may upload it;
+use only trusted providers and a trusted transfer channel. Partial exports can also
+contain credentials. This plugin provides no transfer channel or invitation
+authentication. The binary invitation is exactly 52 bytes: ASCII `WTG1`, a 16-byte
+opaque group ID, and a 32-byte group data key. Names are entered locally.
+Invitations and group keys are separate from, and do not replace, community PDL
+credentials. Version-2 local state is upgraded on open, preserving memberships
+and counters; older or invalid formats fail closed.
+
+An unwired AES-GCM envelope encrypts synthetic chat, location and map documents
+using the separate 256-bit group data key. It authenticates format, group ID,
+sender ID and content kind, and contains no native public document fields.
+Local chat, track/location, mapitem, and alert encoding boundaries emit native
+documents only for Community and authenticated envelopes only for a private
+selection; encoding or encryption errors never fall back to Community.
+Prepared output carries a persisted selection generation and scope; release is
+single-use and rejected after any selection change, including switching away and
+back. Per-group memberships and sender counters remain stored separately, so
+local users can switch groups after use. This only fences prepared local encoder
+output: no runtime dispatcher or pending delivery state is connected.
+
+Each installation derives a sender-specific encryption key and counts envelope
+attempts before output, with a per-sender 100,000-envelope limit and a 1,000,000
+wrapping-key storage-write limit. Counters are retained per membership across local
+group switches. Nonces are random 96-bit
+values, so collisions remain possible. Accounting is not rollback-resistant:
+restoring an older encrypted state or losing a recent filesystem update can defeat
+the limits. A member can also create other sender IDs. These limits are not a
+production nonce-safety guarantee. Local tests use synthetic keys and do not verify
+Android Keystore, filesystem crash durability or a real host/device.
+
+This is not yet private communication: no transport, subscription, delivery,
+group-scoped replay journal, cache, point ledger, outbox, or ownership handoff is
+wired. Thus no connected pending or replay state needs local segregation today;
+future runtime integration must scope those stores by group or reject switching
+while state is pending, and must verify the prepared scope/generation immediately
+before transport release. No local encoding or decryption marks data as delivered.
+Existing public encoders remain independently callable and must be gated by the
+eventual dispatcher before runtime activation; pending state must be isolated or
+group switching rejected. Encrypted state has no rollback protection. Encryption
+does not hide peers, traffic metadata or group IDs, prevent replay or member
+impersonation, or provide per-member revocation. TAK, SITX, multicast and
+Companion routes remain independent and are not disabled or made private by this
+plugin selection.
 
 Isolated, currently unwired v2 Ditto-to-CoT decoders validate and convert PLI,
 marker, emergency, and inbound native/extended chat documents. They reject malformed,
@@ -212,7 +291,7 @@ The service action and signature-level bind permission follow the
 [WearTAK plugin template](https://git.tak.gov/weartak-plugins/weartak-plugin-template)
 at commit `a4af9f1b9bd015310743a6b0aef4bb0b24d65bf6`. A host connection alone
 does not mean Ditto is available. Service startup deliberately leaves the SDK lifecycle
-outside `RUNNING`; settings writes fail explicitly.
+outside `RUNNING`; only the local group selection can be changed through settings.
 
 Initialization checks the Binder caller UID against the claimed UID and package,
 requires that package to hold the bind permission and share the plugin's signing
@@ -225,9 +304,9 @@ An unbind on any distinct binding intent may invalidate other clients' handles;
 they must reconnect. There is no package allowlist: any same-signing-identity package
 with the permission is trusted, and packages sharing a UID cannot be distinguished
 as Binder callers. These checks do not prove host process identity, exclusive
-ownership, provisioning, or shutdown. Android package visibility, permission grants,
+ownership, provisioning, or shutdown. Android package visibility, permission grants, activity launch and picker behavior,
 signing lineage, real host handshake order and reconnect behavior need device
-validation; different debug/production keys can prevent binding or initialization.
+validation; different debug/production keys can prevent launch, binding or initialization.
 The session is UID/package-scoped, not process-scoped: host process death or restart
 alone is not detected, and there is no Binder death-linked ownership lease.
 The coordinating core session verified current `PluginConnection.initialize` ordering:
