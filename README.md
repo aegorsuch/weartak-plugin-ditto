@@ -134,7 +134,11 @@ Do not commit the AAR, vendor binaries, credentials, signing keys, Ditto identit
 TAK.gov CI runs a debug build and debug/release unit tests on branch,
 merge-request, and tag pipelines without production signing credentials. It builds
 the SDK from pinned core builder inputs using `CI_JOB_TOKEN`; the core project must
-allow this plugin project in its job-token scope. The signed release-build job runs
+allow this plugin project in its job-token scope. CI downloads the official Gradle
+8.10.2 binary distribution and checks its SHA-256 against the
+[Gradle-published checksum](https://services.gradle.org/distributions/gradle-8.10.2-bin.zip.sha256).
+It seeds the pinned SDK wrapper's isolated cache with the verified distribution and
+uses the same distribution for the plugin build. The signed release-build job runs
 only on a protected default-branch push and requires protected
 `WEARTAK_RELEASE_KEYSTORE_B64`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, and
 `RELEASE_KEY_PASSWORD` variables scoped to the `signed-plugin-build` environment.

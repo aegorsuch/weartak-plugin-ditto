@@ -41,10 +41,14 @@ plugin_tests:
     - |
       set -eu
       unset WEARTAK_RELEASE_KEYSTORE_B64 RELEASE_STORE_PASSWORD RELEASE_KEY_ALIAS RELEASE_KEY_PASSWORD
+      GRADLE_ROOT="$( ( unset CI_JOB_TOKEN; sh ci/prepare_gradle.sh ) )"
+      trap 'rm -rf "$GRADLE_ROOT"' EXIT
+      export GRADLE_USER_HOME="$GRADLE_ROOT/gradle-home"
       SDK_AAR="$(sh ci/prepare_pinned_plugin_sdk.sh)"
       unset CI_JOB_TOKEN
-      trap 'rm -f "$SDK_AAR"' EXIT
-      gradle --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process \
+      trap 'rm -f "$SDK_AAR"; rm -rf "$GRADLE_ROOT"' EXIT
+      "$GRADLE_USER_HOME/wrapper/dists/gradle-8.10.2-bin/a04bxjujx95o3nb99gddekhwo/gradle-8.10.2/bin/gradle" \
+        --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process \
         "-PweartakPluginSdkAar=$SDK_AAR" \
         :app:assembleDebug :app:testDebugUnitTest :app:testReleaseUnitTest --console=plain
   artifacts:
@@ -70,6 +74,14 @@ signed_default_branch_build:
       [ -n "${RELEASE_STORE_PASSWORD:-}" ] || { echo "ERROR: RELEASE_STORE_PASSWORD missing"; exit 1; }
       [ -n "${RELEASE_KEY_ALIAS:-}" ] || { echo "ERROR: RELEASE_KEY_ALIAS missing"; exit 1; }
       [ -n "${RELEASE_KEY_PASSWORD:-}" ] || { echo "ERROR: RELEASE_KEY_PASSWORD missing"; exit 1; }
+      GRADLE_ROOT="$(
+        (
+          unset CI_JOB_TOKEN WEARTAK_RELEASE_KEYSTORE_B64 RELEASE_STORE_PASSWORD RELEASE_KEY_ALIAS RELEASE_KEY_PASSWORD
+          sh ci/prepare_gradle.sh
+        )
+      )"
+      trap 'rm -rf "$GRADLE_ROOT"' EXIT
+      export GRADLE_USER_HOME="$GRADLE_ROOT/gradle-home"
       SDK_AAR="$(
         (
           unset WEARTAK_RELEASE_KEYSTORE_B64 RELEASE_STORE_PASSWORD RELEASE_KEY_ALIAS RELEASE_KEY_PASSWORD
@@ -77,8 +89,9 @@ signed_default_branch_build:
         )
       )"
       unset CI_JOB_TOKEN
-      trap 'rm -f "$SDK_AAR"' EXIT
-      gradle --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process \
+      trap 'rm -f "$SDK_AAR"; rm -rf "$GRADLE_ROOT"' EXIT
+      "$GRADLE_USER_HOME/wrapper/dists/gradle-8.10.2-bin/a04bxjujx95o3nb99gddekhwo/gradle-8.10.2/bin/gradle" \
+        --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process \
         "-PweartakPluginSdkAar=$SDK_AAR" \
         clean :app:assembleRelease :app:verifyReleaseSigning --console=plain
       APK="app/build/outputs/apk/release/app-release.apk"
