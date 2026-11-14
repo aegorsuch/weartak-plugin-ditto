@@ -1,0 +1,96 @@
+include:
+  - project: devsecops/gitlab-ci-common
+    ref: master
+    file: /template/artifactory_token_service.yml
+
+before_script: []
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+variables:
+  GRADLE_BUILD_LAUNCHER_TAG: "2.6.2"
+  KUBERNETES_MEMORY_LIMIT: "8Gi"
+  GRADLE_USER_HOME: "$CI_PROJECT_DIR/.gradle"
+
+stages:
+  - test
+  - build
+
+.artifactory_credentials:
+  extends: .artifactory_service_create_token_no_depends_bash
+  before_script:
+    - !reference [.artifactory_service_create_token_no_depends_bash, before_script]
+    - export ARTIFACTORY_USER="$GITLAB_USER_EMAIL" ARTIFACTORY_PASSWORD="$CI_JOB_ARTIFACTORY_TOKEN"
+
+.gradle_image:
+  image:
+    name: ${TAK_REGISTRY_HOST}/devsecops/gradle-build-launcher:17-${GRADLE_BUILD_LAUNCHER_TAG}
+    entrypoint: [""]
+
+plugin_tests:
+  extends: [.gradle_image, .artifactory_credentials]
+  stage: test
+  interruptible: true
+  script:
+    - |
+      set -eu
+      unset WEARTAK_RELEASE_KEYSTORE_B64 RELEASE_STORE_PASSWORD RELEASE_KEY_ALIAS RELEASE_KEY_PASSWORD
+      SDK_AAR="$(sh ci/prepare_pinned_plugin_sdk.sh)"
+      unset CI_JOB_TOKEN
+      trap 'rm -f "$SDK_AAR"' EXIT
+      gradle --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process \
+        "-PweartakPluginSdkAar=$SDK_AAR" \
+        :app:assembleDebug :app:testDebugUnitTest :app:testReleaseUnitTest --console=plain
+  artifacts:
+    when: always
+    expire_in: 7 days
+    reports:
+      junit: app/build/test-results/testDebugUnitTest/*.xml
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+signed_default_branch_build:
+  extends: [.gradle_image, .artifactory_credentials]
+  stage: build
+  environment:
+    name: signed-plugin-build
+    action: prepare
+  script:
+    - |
+      set -eu
+      [ -n "${WEARTAK_RELEASE_KEYSTORE_B64:-}" ] || { echo "ERROR: WEARTAK_RELEASE_KEYSTORE_B64 missing"; exit 1; }
+      [ -n "${RELEASE_STORE_PASSWORD:-}" ] || { echo "ERROR: RELEASE_STORE_PASSWORD missing"; exit 1; }
+      [ -n "${RELEASE_KEY_ALIAS:-}" ] || { echo "ERROR: RELEASE_KEY_ALIAS missing"; exit 1; }
+      [ -n "${RELEASE_KEY_PASSWORD:-}" ] || { echo "ERROR: RELEASE_KEY_PASSWORD missing"; exit 1; }
+      SDK_AAR="$(
+        (
+          unset WEARTAK_RELEASE_KEYSTORE_B64 RELEASE_STORE_PASSWORD RELEASE_KEY_ALIAS RELEASE_KEY_PASSWORD
+          sh ci/prepare_pinned_plugin_sdk.sh
+        )
+      )"
+      unset CI_JOB_TOKEN
+      trap 'rm -f "$SDK_AAR"' EXIT
+      gradle --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process \
+        "-PweartakPluginSdkAar=$SDK_AAR" \
+        clean :app:assembleRelease :app:verifyReleaseSigning --console=plain
+      APK="app/build/outputs/apk/release/app-release.apk"
+      [ -f "$APK" ] || { echo "ERROR: Signed release APK missing"; exit 1; }
+      sha256sum "$APK" > app/build/outputs/apk/release/verified-apk.sha256
+  artifacts:
+    when: on_success
+    expire_in: 7 days
+    access: developer
+    paths:
+      - app/build/outputs/apk/release/app-release.apk
+      - app/build/outputs/apk/release/verified-apk.sha256
+      - app/build/outputs/apk/release/output-metadata.json
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_REF_PROTECTED == "true" && $CI_PIPELINE_SOURCE == "push"'

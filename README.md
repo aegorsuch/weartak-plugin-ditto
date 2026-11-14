@@ -131,6 +131,21 @@ AIDL exceeds path limits. The offline plugin command requires cached dependencie
 Robolectric may separately require its Android test runtime cache or network access.
 Do not commit the AAR, vendor binaries, credentials, signing keys, Ditto identity, or PDL.
 
+TAK.gov CI runs a debug build and debug/release unit tests on branch,
+merge-request, and tag pipelines without production signing credentials. It builds
+the SDK from pinned core builder inputs using `CI_JOB_TOKEN`; the core project must
+allow this plugin project in its job-token scope. The signed release-build job runs
+only on a protected default-branch push and requires protected
+`WEARTAK_RELEASE_KEYSTORE_B64`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, and
+`RELEASE_KEY_PASSWORD` variables scoped to the `signed-plugin-build` environment.
+Keep these variables protected and masked, and do not leave wildcard-scoped copies
+inherited by test jobs. It publishes a seven-day, developer-accessible CI artifact
+only after `:app:verifyReleaseSigning` accepts the canonical certificate.
+It does not create a GitLab release or publish to a mirror. Pipelines other than
+protected default-branch pushes do not produce signed APKs. The artifact remains a
+local subgroup UI trial build; Ditto runtime, mesh, host network checklist, status
+icon, and priority integration remain unwired.
+
 ## Developer Notes
 
 The core currently uses Ditto `4.14.6`. Unit tests compile the separate SDK bridge
