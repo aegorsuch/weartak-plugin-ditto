@@ -6,6 +6,7 @@ import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
 import java.util.Base64
+import java.util.zip.ZipFile
 import org.gradle.BuildAdapter
 import org.gradle.BuildResult
 
@@ -77,6 +78,51 @@ if (sdkHash !in approvedSdkHashes) {
     throw GradleException("WearTAK SDK AAR does not match the pinned combined SDK hash.")
 }
 
+val hostServicesSdkPath = providers.gradleProperty("weartakHostServicesSdkAar").orNull
+    ?: throw GradleException("Set -PweartakHostServicesSdkAar to the verified host-services SDK AAR.")
+val hostServicesSdkFile = file(hostServicesSdkPath)
+if (!File(hostServicesSdkPath).isAbsolute || !hostServicesSdkFile.isFile) {
+    throw GradleException("weartakHostServicesSdkAar must be an absolute path to an existing file.")
+}
+val approvedHostServicesSdkEntryHashes = mapOf(
+    "AndroidManifest.xml" to "027408acae17a1a3a131236357eeb1221c23d150740b87870fe9609573f36b8e",
+    "R.txt" to "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "classes.jar" to "11a9a3d926b5bd27a63e304ae350d7f44c31f74a745bad294edd86eb6238a10a",
+    "proguard.txt" to "0834f3b925448c7fca332d58dd50cbf73e30ba0199bfce3dd39a638a88f6b05d",
+    "META-INF/com/android/build/gradle/aar-metadata.properties" to
+        "9cc8517bbdf06d879f57a2cfd6f8c6914e48800d443421cd850971945f98e7b2",
+)
+ZipFile(hostServicesSdkFile).use { archive ->
+    val archiveEntries = archive.entries().asSequence()
+        .filterNot { it.isDirectory }
+        .toList()
+    if (archiveEntries.size != approvedHostServicesSdkEntryHashes.size) {
+        throw GradleException("Host-services SDK AAR contains unexpected entries.")
+    }
+    val actualEntries = archiveEntries
+        .associate { entry ->
+            val digest = MessageDigest.getInstance("SHA-256")
+            archive.getInputStream(entry).use { input ->
+                if (entry.name == "proguard.txt") {
+                    val canonicalText = input.readBytes().toString(Charsets.UTF_8)
+                        .replace("\r\n", "\n")
+                    digest.update(canonicalText.toByteArray(Charsets.UTF_8))
+                } else {
+                    val buffer = ByteArray(8192)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        digest.update(buffer, 0, count)
+                    }
+                }
+            }
+            entry.name to digest.digest().joinToString("") { "%02x".format(it) }
+        }
+    if (actualEntries != approvedHostServicesSdkEntryHashes) {
+        throw GradleException("Host-services SDK AAR contents do not match the pinned core contract build.")
+    }
+}
+
 val releaseKeystoreFile = if (releaseSigningConfigured) {
     val encoded = releaseSigningVariables.getValue("WEARTAK_RELEASE_KEYSTORE_B64").get()
     val keystoreBytes = try {
@@ -144,7 +190,6 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildFeatures {
         buildConfig = true
-        aidl = true
     }
     testOptions { unitTests.isIncludeAndroidResources = true }
     signingConfigs {
@@ -186,6 +231,7 @@ val dittoTestFakeJar by tasks.registering(Jar::class) {
 
 dependencies {
     implementation(files(sdkFile))
+    implementation(files(hostServicesSdkFile))
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
     testCompileOnly("live.ditto:ditto:4.14.6")

@@ -24,16 +24,17 @@ provisioning path for this separate package remain unverified. No identity or PD
 included or loaded, and the runtime stays disabled until provisioning and safe ownership
 handoff are implemented.
 
-The plugin can recognize a proposed version 1 Community control only from the
-production host package with an exclusive UID and the pinned release signer. The
-v1 Binder wire interface is independently declared from the WearTAK core
-specification as a temporary compatibility shim; replace it with a reproducibly
-versioned host-services SDK when available. Synthetic tests exercise asynchronous
-responses, bounded retries and stale-session fencing. Production reads remain
-disabled, and the client does not retain or deliver an identity. Capability discovery
-is not provisioning or proof of host process identity, exclusive runtime ownership,
-or a safe handoff. Ownership and recovery fencing, migration and device validation
-remain required.
+The plugin consumes Community contract v1 from the [WearTAK host-services SDK
+module](https://git.tak.gov/core/weartak-core/wearos-tak-civ/-/tree/07d8649559dee44543f82cd1895c726fd904e64f/weartak-plugin-host-services-sdk)
+at core commit `07d8649559dee44543f82cd1895c726fd904e64f`; source and license notices
+remain in core, and no SDK binary is vendored. CI fetches the pinned SDK module and
+version catalog using the scoped job token, builds its release AAR with Gradle 8.14.5,
+and checks its contents against pinned SHA-256 digests before use. Synthetic tests
+exercise SDK-generated Binder responses, bounded retries and stale-session fencing.
+Production reads remain disabled, and the client does not retain or deliver an
+identity. Capability discovery is not provisioning or proof of host process identity,
+exclusive runtime ownership, or a safe handoff. Ownership and recovery fencing,
+migration and device validation remain required.
 
 ## Point of Contacts
 
@@ -46,9 +47,9 @@ requirements have not been established for the separate plugin.
 
 ## Equipment Required
 
-Development requires JDK 17, Android SDK platform 34, and a verified combined WearTAK
-plugin SDK AAR and Gradle 8.10.2. A compatible Wear OS watch is required for eventual
-device validation.
+Development requires JDK 17, Android SDK platforms 34 and 35, Gradle 8.14.5, and
+verified combined WearTAK plugin SDK and host-services SDK AARs. A compatible Wear OS
+watch is required for eventual device validation.
 
 ## Equipment Supported
 
@@ -57,13 +58,14 @@ version has been validated.
 
 ## Compilation
 
-The SDK AAR is not included. On Windows, the following obtains only the required
-tracked build inputs from canonical core commit
-`00290203f9a6bb09870c53f2cdac0e110ed88125` into a new temporary directory,
-then builds the combined SDK. It requires read access to
+The SDK AARs are not included. On Windows, the following obtains only the required
+tracked build inputs from canonical core commits
+`00290203f9a6bb09870c53f2cdac0e110ed88125` and
+`07d8649559dee44543f82cd1895c726fd904e64f` into a temporary directory, then builds
+both SDKs. It requires read access to
 [TAK.gov core](https://git.tak.gov/core/weartak-core/wearos-tak-civ),
 [GitHub SDK source](https://github.com/aegorsuch/weartak-plugin-sdk), Git, Python 3,
-JDK 17, Gradle 8.10.2, Android SDK platform 34, and `ANDROID_HOME` pointing to the Android SDK.
+JDK 17, Gradle 8.14.5, Android SDK platforms 34 and 35, and `ANDROID_HOME` pointing to the Android SDK.
 Gradle and Maven dependencies may require network access. Configure Git credentials
 beforehand; do not put credentials in commands or this repository. Run from this
 plugin repository in PowerShell. Install Gradle separately and verify its distribution
@@ -104,10 +106,22 @@ $aar = Join-Path $root '.gradle\sdk\86bdc8b04797-a818af15b332\build\outputs\aar\
 if ((Get-FileHash $aar -Algorithm SHA256).Hash -ne '6ec84b18e1c8ac6b4be727083c4ea7a572150b521384270212434c239e5a1e0b') {
     throw 'Unexpected SDK AAR hash.'
 }
+$hostCommit = '07d8649559dee44543f82cd1895c726fd904e64f'
+Invoke-CheckedGit -C $root fetch --quiet --depth=1 --filter=blob:none origin $hostCommit
+foreach ($object in @('gradle/libs.versions.toml', 'weartak-plugin-host-services-sdk')) {
+    Invoke-CheckedGit -C $root cat-file -e "${hostCommit}:$object"
+}
+Invoke-CheckedGit -c core.autocrlf=false -C $root checkout $hostCommit -- `
+    'gradle\libs.versions.toml' 'weartak-plugin-host-services-sdk'
+$hostServicesSdkAar = Join-Path $root 'weartak-plugin-host-services-sdk\build\outputs\aar\weartak-plugin-host-services-sdk-release.aar'
+gradle -p (Join-Path $root 'weartak-plugin-host-services-sdk') assembleRelease `
+    --no-daemon --max-workers=2 '-Pkotlin.compiler.execution.strategy=in-process' --console=plain
+if ($LASTEXITCODE -ne 0) { throw 'Host-services SDK build failed.' }
 gradle :app:assembleDebug :app:testDebugUnitTest :app:assembleRelease :app:testReleaseUnitTest `
     :app:verifyReleaseSigning `
     --offline --no-daemon --max-workers=2 `
-    '-Pkotlin.compiler.execution.strategy=in-process' "-PweartakPluginSdkAar=$aar" --console=plain
+    '-Pkotlin.compiler.execution.strategy=in-process' `
+    "-PweartakPluginSdkAar=$aar" "-PweartakHostServicesSdkAar=$hostServicesSdkAar" --console=plain
 if ($LASTEXITCODE -ne 0) { throw 'Plugin build or tests failed.' }
 ```
 
@@ -144,10 +158,11 @@ Do not commit the AAR, vendor binaries, credentials, signing keys, Ditto identit
 
 TAK.gov CI runs a debug build and debug/release unit tests on branch,
 merge-request, and tag pipelines without production signing credentials. It builds
-the SDK from pinned core builder inputs using `CI_JOB_TOKEN`; the core project must
-allow this plugin project in its job-token scope. CI downloads the official Gradle
-8.10.2 binary distribution and checks its SHA-256 against the
-[Gradle-published checksum](https://services.gradle.org/distributions/gradle-8.10.2-bin.zip.sha256).
+both SDK AARs from pinned core inputs, including host-services SDK commit
+`07d8649559dee44543f82cd1895c726fd904e64f`, using `CI_JOB_TOKEN`; the core project
+must allow this plugin project in its job-token scope. CI downloads the official Gradle
+8.14.5 binary distribution and checks its SHA-256 against the
+[Gradle-published checksum](https://services.gradle.org/distributions/gradle-8.14.5-bin.zip.sha256).
 It seeds the pinned SDK wrapper's isolated cache with the verified distribution and
 uses the same distribution for the plugin build. The signed release-build job runs
 only on a protected default-branch push and requires protected

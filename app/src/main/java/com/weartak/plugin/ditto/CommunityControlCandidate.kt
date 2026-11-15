@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.os.IBinder
 import android.os.RemoteException
 import android.util.Log
+import com.weartak.plugin.sdk.community.v1.CommunityIdentityContract
 import com.weartak.plugin.sdk.community.v1.ICommunityIdentityControlV1
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -42,9 +43,9 @@ internal class CommunityControlCandidate(
     fun initialize(uid: Int, packageName: String, extras: Bundle) = synchronized(lock) {
         detach()
         if (closed || !trustHost(uid, packageName) ||
-            extras.getInt(EXTRA_VERSION, 0) != VERSION
+            extras.getInt(CommunityIdentityContract.EXTRA_VERSION, 0) != CommunityIdentityContract.VERSION
         ) return
-        val binder = extras.getBinder(EXTRA_CONTROL) ?: return
+        val binder = extras.getBinder(CommunityIdentityContract.EXTRA_CONTROL) ?: return
         if (!binder.isBinderAlive) return
         val death = object : IBinder.DeathRecipient {
             override fun binderDied() = synchronized(lock) {
@@ -99,7 +100,7 @@ internal class CommunityControlCandidate(
         }
         val control = ICommunityIdentityControlV1.Stub.asInterface(selected.binder)
         val result = try {
-            if (control.version != VERSION) {
+            if (control.version != CommunityIdentityContract.VERSION) {
                 State.UNAVAILABLE
             } else {
                 synchronized(lock) {
@@ -141,16 +142,32 @@ internal class CommunityControlCandidate(
     private fun validate(result: Bundle?): State {
         if (result == null) return State.UNAVAILABLE
         @Suppress("DEPRECATION")
-        val status = result.get(KEY_STATUS) as? String ?: return State.UNAVAILABLE
+        val status = result.get(CommunityIdentityContract.KEY_STATUS) as? String
+            ?: return State.UNAVAILABLE
         return when (status) {
-            "inactive" -> if (result.keySet() == setOf(KEY_STATUS)) State.RETRYING else State.UNAVAILABLE
-            "unauthorized" -> if (result.keySet() == setOf(KEY_STATUS)) State.UNAUTHORIZED else State.UNAVAILABLE
-            "unavailable" -> State.UNAVAILABLE
-            "ok" -> {
-                if (result.keySet() != setOf(KEY_STATUS, KEY_IDENTITY)) return State.UNAVAILABLE
+            CommunityIdentityContract.INACTIVE ->
+                if (result.keySet() == setOf(CommunityIdentityContract.KEY_STATUS)) {
+                    State.RETRYING
+                } else {
+                    State.UNAVAILABLE
+                }
+            CommunityIdentityContract.UNAUTHORIZED ->
+                if (result.keySet() == setOf(CommunityIdentityContract.KEY_STATUS)) {
+                    State.UNAUTHORIZED
+                } else {
+                    State.UNAVAILABLE
+                }
+            CommunityIdentityContract.UNAVAILABLE -> State.UNAVAILABLE
+            CommunityIdentityContract.OK -> {
+                if (result.keySet() != setOf(
+                        CommunityIdentityContract.KEY_STATUS,
+                        CommunityIdentityContract.KEY_IDENTITY,
+                    )
+                ) return State.UNAVAILABLE
                 @Suppress("DEPRECATION")
-                val encoded = result.get(KEY_IDENTITY) as? String ?: return State.UNAVAILABLE
-                if (encoded.length !in 1..MAX_IDENTITY_LENGTH ||
+                val encoded = result.get(CommunityIdentityContract.KEY_IDENTITY) as? String
+                    ?: return State.UNAVAILABLE
+                if (encoded.length !in 1..CommunityIdentityContract.MAX_IDENTITY_LENGTH ||
                     !ENCODED_IDENTITY.matches(encoded) || encoded.length % 4 == 1 ||
                     ('=' in encoded && encoded.length % 4 != 0)
                 ) State.UNAVAILABLE else State.VALIDATED
@@ -181,12 +198,6 @@ internal class CommunityControlCandidate(
     }
 
     private companion object {
-        const val VERSION = 1
-        const val EXTRA_VERSION = "com.weartak.plugin.ditto.community.version"
-        const val EXTRA_CONTROL = "com.weartak.plugin.ditto.community.v1"
-        const val KEY_STATUS = "status"
-        const val KEY_IDENTITY = "identity"
-        const val MAX_IDENTITY_LENGTH = 16_384
         const val MAX_RETRIES = 20
         val ENCODED_IDENTITY = Regex("[A-Za-z0-9_-]+={0,2}")
     }

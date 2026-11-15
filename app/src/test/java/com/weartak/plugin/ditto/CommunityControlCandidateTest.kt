@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.os.IBinder
 import android.os.Parcel
 import android.os.RemoteException
+import com.weartak.plugin.sdk.community.v1.CommunityIdentityContract
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -43,9 +44,12 @@ class CommunityControlCandidateTest {
         }
     }
 
-    private fun extras(control: Control?, version: Int = 1) = Bundle().apply {
-        putInt("com.weartak.plugin.ditto.community.version", version)
-        if (control != null) putBinder("com.weartak.plugin.ditto.community.v1", control)
+    private fun extras(
+        control: Control?,
+        version: Int = CommunityIdentityContract.VERSION,
+    ) = Bundle().apply {
+        putInt(CommunityIdentityContract.EXTRA_VERSION, version)
+        if (control != null) putBinder(CommunityIdentityContract.EXTRA_CONTROL, control)
     }
 
     @Test

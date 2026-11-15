@@ -46,10 +46,11 @@ plugin_tests:
       export GRADLE_USER_HOME="$GRADLE_ROOT/gradle-home"
       SDK_AAR="$(sh ci/prepare_pinned_plugin_sdk.sh)"
       unset CI_JOB_TOKEN
-      trap 'rm -f "$SDK_AAR"; rm -rf "$GRADLE_ROOT"' EXIT
-      "$GRADLE_USER_HOME/wrapper/dists/gradle-8.10.2-bin/a04bxjujx95o3nb99gddekhwo/gradle-8.10.2/bin/gradle" \
+      trap 'rm -f "$SDK_AAR" "$(dirname "$SDK_AAR")/verified-weartak-plugin-host-services-sdk-release.aar"; rm -rf "$GRADLE_ROOT"' EXIT
+      "$GRADLE_USER_HOME/wrapper/dists/gradle-8.14.5-bin/690y85m0j9nfaub7xoiayko8a/gradle-8.14.5/bin/gradle" \
         --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process \
         "-PweartakPluginSdkAar=$SDK_AAR" \
+        "-PweartakHostServicesSdkAar=$(dirname "$SDK_AAR")/verified-weartak-plugin-host-services-sdk-release.aar" \
         :app:assembleDebug :app:testDebugUnitTest :app:testReleaseUnitTest --console=plain
   artifacts:
     when: always
@@ -89,10 +90,11 @@ signed_default_branch_build:
         )
       )"
       unset CI_JOB_TOKEN
-      trap 'rm -f "$SDK_AAR"; rm -rf "$GRADLE_ROOT"' EXIT
-      "$GRADLE_USER_HOME/wrapper/dists/gradle-8.10.2-bin/a04bxjujx95o3nb99gddekhwo/gradle-8.10.2/bin/gradle" \
+      trap 'rm -f "$SDK_AAR" "$(dirname "$SDK_AAR")/verified-weartak-plugin-host-services-sdk-release.aar"; rm -rf "$GRADLE_ROOT"' EXIT
+      "$GRADLE_USER_HOME/wrapper/dists/gradle-8.14.5-bin/690y85m0j9nfaub7xoiayko8a/gradle-8.14.5/bin/gradle" \
         --no-daemon --max-workers=2 -Pkotlin.compiler.execution.strategy=in-process \
         "-PweartakPluginSdkAar=$SDK_AAR" \
+        "-PweartakHostServicesSdkAar=$(dirname "$SDK_AAR")/verified-weartak-plugin-host-services-sdk-release.aar" \
         clean :app:assembleRelease :app:verifyReleaseSigning --console=plain
       APK="app/build/outputs/apk/release/app-release.apk"
       [ -f "$APK" ] || { echo "ERROR: Signed release APK missing"; exit 1; }

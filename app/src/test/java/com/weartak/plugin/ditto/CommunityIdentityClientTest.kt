@@ -7,6 +7,7 @@ import android.os.IInterface
 import android.os.Parcel
 import android.os.RemoteException
 import android.util.Base64
+import com.weartak.plugin.sdk.community.v1.CommunityIdentityContract
 import com.weartak.plugin.sdk.community.v1.ICommunityIdentityControlV1
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -51,12 +52,15 @@ class CommunityIdentityClientTest {
     }
 
     private fun extras(control: IBinder) = Bundle().apply {
-        putInt("com.weartak.plugin.ditto.community.version", 1)
-        putBinder("com.weartak.plugin.ditto.community.v1", control)
+        putInt(CommunityIdentityContract.EXTRA_VERSION, CommunityIdentityContract.VERSION)
+        putBinder(CommunityIdentityContract.EXTRA_CONTROL, control)
     }
 
-    private fun status(status: String) = Bundle().apply { putString("status", status) }
-    private fun ok() = status("ok").apply { putString("identity", "c3ludGhldGlj") }
+    private fun status(status: String) =
+        Bundle().apply { putString(CommunityIdentityContract.KEY_STATUS, status) }
+    private fun ok() = status(CommunityIdentityContract.OK).apply {
+        putString(CommunityIdentityContract.KEY_IDENTITY, "c3ludGhldGlj")
+    }
 
     private fun awaitTerminal(candidate: CommunityControlCandidate) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
