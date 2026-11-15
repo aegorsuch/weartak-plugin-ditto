@@ -106,6 +106,7 @@ ZipFile(hostServicesSdkFile).use { archive ->
                 if (entry.name == "proguard.txt") {
                     val canonicalText = input.readBytes().toString(Charsets.UTF_8)
                         .replace("\r\n", "\n")
+                        .replace("\r", "\n")
                     digest.update(canonicalText.toByteArray(Charsets.UTF_8))
                 } else {
                     val buffer = ByteArray(8192)
@@ -119,7 +120,18 @@ ZipFile(hostServicesSdkFile).use { archive ->
             entry.name to digest.digest().joinToString("") { "%02x".format(it) }
         }
     if (actualEntries != approvedHostServicesSdkEntryHashes) {
-        throw GradleException("Host-services SDK AAR contents do not match the pinned core contract build.")
+        val differences = (actualEntries.keys + approvedHostServicesSdkEntryHashes.keys)
+            .distinct()
+            .sorted()
+            .filter { actualEntries[it] != approvedHostServicesSdkEntryHashes[it] }
+            .joinToString { name ->
+                val actual = actualEntries[name] ?: "missing"
+                val expected = approvedHostServicesSdkEntryHashes[name] ?: "absent"
+                "$name=$actual (expected $expected)"
+            }
+        throw GradleException(
+            "Host-services SDK AAR contents do not match the pinned core contract build: $differences",
+        )
     }
 }
 
