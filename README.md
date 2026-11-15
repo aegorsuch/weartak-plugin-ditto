@@ -24,6 +24,17 @@ provisioning path for this separate package remain unverified. No identity or PD
 included or loaded, and the runtime stays disabled until provisioning and safe ownership
 handoff are implemented.
 
+The plugin can recognize a proposed version 1 Community control only from the
+production host package with an exclusive UID and the pinned release signer. The
+v1 Binder wire interface is independently declared from the WearTAK core
+specification as a temporary compatibility shim; replace it with a reproducibly
+versioned host-services SDK when available. Synthetic tests exercise asynchronous
+responses, bounded retries and stale-session fencing. Production reads remain
+disabled, and the client does not retain or deliver an identity. Capability discovery
+is not provisioning or proof of host process identity, exclusive runtime ownership,
+or a safe handoff. Ownership and recovery fencing, migration and device validation
+remain required.
+
 ## Point of Contacts
 
 Undocumented.
@@ -147,8 +158,13 @@ inherited by test jobs. It publishes a seven-day, developer-accessible CI artifa
 only after `:app:verifyReleaseSigning` accepts the canonical certificate.
 It does not create a GitLab release or publish to a mirror. Pipelines other than
 protected default-branch pushes do not produce signed APKs. The artifact remains a
-local subgroup UI trial build; Ditto runtime, mesh, host network checklist, status
-icon, and priority integration remain unwired.
+local subgroup UI trial build; Ditto runtime and mesh remain unavailable.
+
+The current source reports a disconnected Ditto route with "Runtime unavailable" to
+compatible authenticated hosts, which can list it in icon-priority settings. There is
+no connectivity toggle or connected icon while the runtime is unavailable; hosts
+without route-status support show no route. A previously built artifact does not
+necessarily include this source change.
 
 ## Developer Notes
 
@@ -177,6 +193,33 @@ instance: those objects and their host ownership contracts do not exist here. It
 must not be wired until authenticated exclusive ownership, provisioning,
 and positive shutdown acknowledgement are established. Synthetic tests exercise
 the adapter's own behavior, not SDK or network behavior.
+
+An unwired power policy mirrors core's off-wrist, low-battery, sleep and power-save
+suppression, charging and alert overrides, and 60-second alert grace. Its inputs are
+explicit: a future watch runtime must obtain current wrist and battery observations,
+charging and alert state, sleep and power-save state, the configured threshold and
+off-wrist preference, and a monotonic elapsed-realtime clock. As in core, unknown
+wrist or battery observations alone do not suppress sync; unavailable required
+inputs must not be silently treated as known values. Unlike core, this adapter
+rejects battery and threshold values outside 0-100 and invalid elapsed times.
+Core obtains wrist, battery, charging, alert and preference state from its own data
+repository, which the plugin cannot directly assume it can access. A future plugin
+runtime needs authenticated sources or its own permitted watch observations and
+settings. Core reads device-idle and power-save from Android's `PowerManager`, plus
+optional OEM bedtime settings, and uses `SystemClock.elapsedRealtime()` for the
+grace deadline. Re-evaluation at grace expiry also needs a lifecycle-owned timer.
+No monitor, sync control, sensor, or recovery timer is connected by this policy.
+
+An unwired transport policy mirrors core's use of the public Wi-Fi Aware feature,
+any observed Wi-Fi network for LAN, and validated internet plus configured
+endpoints for WebSocket. A future adapter must preserve BLE and other SDK settings,
+retain endpoints separately across connectivity changes, and use current trusted
+observations: core derives Wi-Fi and validated internet from Android network
+capabilities. Wi-Fi Direct is not treated as Wi-Fi Aware. Missing observations
+must not be silently treated as known values; no network callback or SDK transport
+configuration is connected here. A separate SDK transport-config adapter compiles
+against Ditto 4.14.6 and is exercised against a synthetic test double; like the stop
+bridge, it is excluded from the APK and cannot start or configure a live runtime.
 
 Local group groundwork stores a single Community/private selection and memberships
 in an authenticated encrypted, app-private no-backup file, wrapped by an Android

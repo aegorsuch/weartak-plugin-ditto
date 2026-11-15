@@ -142,7 +142,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { buildConfig = true }
+    buildFeatures {
+        buildConfig = true
+        aidl = true
+    }
     testOptions { unitTests.isIncludeAndroidResources = true }
     signingConfigs {
         if (releaseSigningConfigured) {

@@ -6,6 +6,10 @@
 
     <uses-feature android:name="android.hardware.type.watch" android:required="true" />
 
+    <queries>
+        <package android:name="com.aitech.weartak_civ" />
+    </queries>
+
     <application
         android:allowBackup="false"
         android:label="WearTAK Ditto (development)">

@@ -29,15 +29,21 @@ import com.weartak.plugin.sdk.validation.ContractValidationResult
 import com.weartak.plugin.sdk.validation.PluginMetadataValidator
 import java.io.IOException
 import java.security.GeneralSecurityException
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 internal class DittoPluginBinder(
     private val context: Context,
     private val lifecycle: PluginLifecycleMachine,
+    routeExecutor: ExecutorService = Executors.newSingleThreadExecutor(),
+    private val communityControl: CommunityControlCandidate =
+        CommunityControlCandidate(CommunityHostTrust(context.packageManager)::matches),
     groupFactory: () -> PrivateGroups = { PrivateGroups.forApp(context) },
 ) : IWearTakPlugin.Stub() {
     private val lock = Any()
     private var closed = false
     private var host: Host? = null
+    private val routeStatus = DittoRouteStatus(routeExecutor)
     private val groupSettings by lazy { GroupSettings(groupFactory()) }
 
     private data class Host(val uid: Int, val packageName: String)
@@ -98,20 +104,26 @@ internal class DittoPluginBinder(
             Log.w(TAG, "Plugin initialization rejected: ${transition.reason}")
         } else {
             host = proposed
+            routeStatus.initialize(init)
+            communityControl.initialize(uid, init.hostPackageName, init.hostExtras)
         }
     }
 
     override fun startPlugin() = withHost {
+        communityControl.start()
         Log.w(TAG, UNAVAILABLE)
         Unit
     }
 
     override fun stopPlugin() = withHost {
+        communityControl.invalidate()
         dispatch(PluginLifecycleEvent.HOST_STOPPED)
     }
 
     override fun shutdownPlugin() = withHost {
+        communityControl.invalidate()
         dispatch(PluginLifecycleEvent.HOST_SHUTDOWN)
+        routeStatus.shutdown()
     }
 
     override fun registerHostCallback(callback: IWearTakHostCallback?) = synchronized(lock) {
@@ -159,6 +171,8 @@ internal class DittoPluginBinder(
     internal fun close() = synchronized(lock) {
         closed = true
         host = null
+        communityControl.close()
+        routeStatus.close()
         lifecycle.dispatch(PluginLifecycleEvent.RESET)
     }
 

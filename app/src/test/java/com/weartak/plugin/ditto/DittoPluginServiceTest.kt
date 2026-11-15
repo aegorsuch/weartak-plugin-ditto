@@ -9,6 +9,8 @@ import android.content.pm.PermissionInfo
 import android.content.pm.Signature
 import android.os.Binder
 import android.os.Bundle
+import android.os.IBinder
+import android.os.RemoteException
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -23,6 +25,11 @@ import com.weartak.plugin.sdk.lifecycle.PluginLifecycleMachine
 import com.weartak.plugin.sdk.model.PluginInitParcel
 import com.weartak.plugin.sdk.model.PluginLifecycleState
 import com.weartak.plugin.sdk.model.SettingsApplyMode
+import com.weartak.plugin.sdk.routestatus.RouteConnectionState
+import com.weartak.plugin.sdk.routestatus.RouteStatusContract
+import com.weartak.plugin.sdk.routestatus.RouteStatusResultCode
+import com.weartak.plugin.sdk.routestatus.aidl.IPluginRouteStatusControlV1
+import com.weartak.plugin.sdk.routestatus.model.PluginRouteStatusParcel
 import com.weartak.plugin.sdk.validation.ContractValidationResult
 import com.weartak.plugin.sdk.validation.SettingsSchemaContractValidator
 import org.junit.Assert.*
@@ -34,6 +41,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowBinder
+import java.util.concurrent.AbstractExecutorService
+import java.util.concurrent.TimeUnit
 import javax.crypto.spec.SecretKeySpec
 
 @RunWith(RobolectricTestRunner::class)
@@ -81,6 +90,68 @@ class DittoPluginServiceTest {
 
     private fun init(uid: Int = hostUid, name: String = hostPackage) =
         PluginInitParcel(name, uid, BuildConfig.APPLICATION_ID)
+
+    private class QueuedExecutor : AbstractExecutorService() {
+        private val tasks = ArrayDeque<Runnable>()
+        private var stopped = false
+        override fun execute(command: Runnable) { check(!stopped); tasks.addLast(command) }
+        fun runAll() { while (tasks.isNotEmpty()) tasks.removeFirst().run() }
+        override fun shutdown() { stopped = true }
+        override fun shutdownNow(): MutableList<Runnable> {
+            stopped = true
+            return tasks.toMutableList().also { tasks.clear() }
+        }
+        override fun isShutdown() = stopped
+        override fun isTerminated() = stopped && tasks.isEmpty()
+        override fun awaitTermination(timeout: Long, unit: TimeUnit) = isTerminated
+    }
+
+    private class RouteControl : IPluginRouteStatusControlV1.Stub() {
+        val reports = mutableListOf<PluginRouteStatusParcel>()
+        val removals = mutableListOf<String>()
+        var result = RouteStatusResultCode.OK
+        var rejectDeathRegistration = false
+        private var recipient: IBinder.DeathRecipient? = null
+        private var alive = true
+        override fun isBinderAlive() = alive
+        override fun linkToDeath(recipient: IBinder.DeathRecipient, flags: Int) {
+            if (rejectDeathRegistration) throw RemoteException("host unavailable")
+            this.recipient = recipient
+        }
+        override fun unlinkToDeath(recipient: IBinder.DeathRecipient, flags: Int): Boolean {
+            if (this.recipient !== recipient) return false
+            this.recipient = null
+            return true
+        }
+        fun die() {
+            alive = false
+            recipient?.binderDied()
+            recipient = null
+        }
+        override fun getContractVersion() = RouteStatusContract.CONTRACT_VERSION
+        override fun reportRouteStatus(status: PluginRouteStatusParcel): Int {
+            reports.add(status)
+            return result
+        }
+        override fun removeRoute(routeId: String): Int {
+            removals.add(routeId)
+            return result
+        }
+        override fun clearRoutes() = result
+    }
+
+    private fun routeInit(control: RouteControl, enabled: Boolean = true) = init().copy(
+        hostExtras = Bundle().apply {
+            putBoolean(RouteStatusContract.EXTRA_CAPABILITY, enabled)
+            putBinder(RouteStatusContract.EXTRA_CONTROL, control)
+        },
+    )
+
+    private fun binderWithExecutor(executor: QueuedExecutor): DittoPluginBinder {
+        val lifecycle = PluginLifecycleMachine()
+        lifecycle.dispatch(PluginLifecycleEvent.BIND_ATTACHED)
+        return DittoPluginBinder(RuntimeEnvironment.getApplication(), lifecycle, executor)
+    }
 
     @After
     fun resetCaller() = ShadowBinder.reset()
@@ -181,6 +252,95 @@ class DittoPluginServiceTest {
     }
 
     @Test
+    fun `authenticated route reports unavailable and retries rejected report with increasing sequence`() {
+        installCaller(hostPackage, hostUid)
+        installCaller("example.other", otherUid)
+        val executor = QueuedExecutor()
+        val binder = binderWithExecutor(executor)
+        val control = RouteControl()
+        ShadowBinder.setCallingUid(otherUid)
+        assertThrows(SecurityException::class.java) {
+            binder.initializePluginV2(routeInit(control), null, null)
+        }
+        executor.runAll()
+        assertTrue(control.reports.isEmpty())
+        ShadowBinder.setCallingUid(hostUid)
+        binder.initializePluginV2(routeInit(control, enabled = false), null, null)
+        executor.runAll()
+        assertTrue(control.reports.isEmpty())
+        control.result = RouteStatusResultCode.INACTIVE_SESSION
+        binder.initializePluginV2(routeInit(control), null, null)
+        assertTrue(control.reports.isEmpty())
+        executor.runAll()
+        control.result = RouteStatusResultCode.OK
+        binder.initializePluginV3(routeInit(control), null, null, null)
+        executor.runAll()
+        assertEquals(2, control.reports.size)
+        assertEquals(control.reports.first().sequence + 1, control.reports.last().sequence)
+        control.reports.forEach {
+            assertEquals(DittoRouteStatus.ROUTE_ID, it.routeId)
+            assertEquals("Ditto", it.label)
+            assertEquals(RouteConnectionState.DISCONNECTED, it.state)
+            assertEquals("Runtime unavailable", it.statusText)
+        }
+        binder.shutdownPlugin()
+        executor.runAll()
+        assertEquals(listOf(DittoRouteStatus.ROUTE_ID), control.removals)
+        binder.close()
+    }
+
+    @Test
+    fun `stale route updates are fenced on replacement death and close`() {
+        installCaller(hostPackage, hostUid)
+        ShadowBinder.setCallingUid(hostUid)
+        val executor = QueuedExecutor()
+        val binder = binderWithExecutor(executor)
+        val old = RouteControl()
+        val replacement = RouteControl()
+        binder.initializePluginV2(routeInit(old), null, null)
+        binder.initializePluginV2(routeInit(replacement), null, null)
+        executor.runAll()
+        assertTrue(old.reports.isEmpty())
+        assertEquals(1, replacement.reports.size)
+        binder.initializePluginV2(routeInit(replacement), null, null)
+        replacement.die()
+        executor.runAll()
+        assertEquals(1, replacement.reports.size)
+        val reconnected = RouteControl()
+        binder.initializePluginV2(routeInit(reconnected), null, null)
+        executor.runAll()
+        assertEquals(RouteConnectionState.DISCONNECTED, reconnected.reports.single().state)
+        assertTrue(reconnected.reports.single().sequence > replacement.reports.single().sequence)
+        binder.initializePluginV2(routeInit(reconnected), null, null)
+        binder.close()
+        executor.runAll()
+        assertEquals(1, reconnected.reports.size)
+    }
+
+    @Test
+    fun `capability withdrawal removes route and failed death registration does not report`() {
+        installCaller(hostPackage, hostUid)
+        ShadowBinder.setCallingUid(hostUid)
+        val executor = QueuedExecutor()
+        val binder = binderWithExecutor(executor)
+        val control = RouteControl()
+        binder.initializePluginV2(routeInit(control), null, null)
+        executor.runAll()
+        binder.initializePluginV2(routeInit(control, enabled = false), null, null)
+        executor.runAll()
+        assertEquals(listOf(DittoRouteStatus.ROUTE_ID), control.removals)
+        val unavailable = RouteControl().apply { rejectDeathRegistration = true }
+        binder.initializePluginV2(routeInit(unavailable), null, null)
+        executor.runAll()
+        assertTrue(unavailable.reports.isEmpty())
+        unavailable.rejectDeathRegistration = false
+        binder.initializePluginV2(routeInit(unavailable), null, null)
+        executor.runAll()
+        assertEquals(RouteConnectionState.DISCONNECTED, unavailable.reports.single().state)
+        binder.close()
+    }
+
+    @Test
     fun `core initialization sequence accepts v2 and v3 without starting runtime`() {
         installCaller(hostPackage, hostUid)
         ShadowBinder.setCallingUid(hostUid)
@@ -198,6 +358,28 @@ class DittoPluginServiceTest {
             assertEquals(PluginLifecycleState.READY, binder.getStatus().state)
             assertEquals(DittoPluginBinder.UNAVAILABLE, binder.getStatus().message)
         }
+    }
+
+    @Test
+    fun `community capability is only tracked after host initialization and invalidated on stop`() {
+        installCaller(hostPackage, hostUid)
+        ShadowBinder.setCallingUid(hostUid)
+        val lifecycle = PluginLifecycleMachine()
+        lifecycle.dispatch(PluginLifecycleEvent.BIND_ATTACHED)
+        val candidate = CommunityControlCandidate(trustHost = { uid, name -> uid == hostUid && name == hostPackage })
+        val binder = DittoPluginBinder(RuntimeEnvironment.getApplication(), lifecycle, communityControl = candidate)
+        val control = RouteControl()
+        val init = init().copy(hostExtras = Bundle().apply {
+            putInt("com.weartak.plugin.ditto.community.version", 1)
+            putBinder("com.weartak.plugin.ditto.community.v1", control)
+        })
+        assertFalse(candidate.hasCandidate)
+        binder.initializePluginV2(init, null, null)
+        assertTrue(candidate.hasCandidate)
+        assertEquals(DittoPluginBinder.UNAVAILABLE, binder.getStatus().message)
+        binder.stopPlugin()
+        assertFalse(candidate.hasCandidate)
+        binder.close()
     }
 
     @Test
