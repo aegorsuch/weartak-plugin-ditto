@@ -85,7 +85,7 @@ if (!File(hostServicesSdkPath).isAbsolute || !hostServicesSdkFile.isFile) {
     throw GradleException("weartakHostServicesSdkAar must be an absolute path to an existing file.")
 }
 val approvedHostServicesSdkEntryHashes = mapOf(
-    "AndroidManifest.xml" to "027408acae17a1a3a131236357eeb1221c23d150740b87870fe9609573f36b8e",
+    "AndroidManifest.xml" to "2a76559914cc535daaa2f9f486351ff47f1436f5d2f11c86fc9c2985957d8caf",
     "R.txt" to "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "classes.jar" to "11a9a3d926b5bd27a63e304ae350d7f44c31f74a745bad294edd86eb6238a10a",
     "proguard.txt" to "0834f3b925448c7fca332d58dd50cbf73e30ba0199bfce3dd39a638a88f6b05d",
@@ -103,7 +103,7 @@ ZipFile(hostServicesSdkFile).use { archive ->
         .associate { entry ->
             val digest = MessageDigest.getInstance("SHA-256")
             archive.getInputStream(entry).use { input ->
-                if (entry.name == "proguard.txt") {
+                if (entry.name == "AndroidManifest.xml" || entry.name == "proguard.txt") {
                     val canonicalText = input.readBytes().toString(Charsets.UTF_8)
                         .replace("\r\n", "\n")
                         .replace("\r", "\n")
