@@ -218,6 +218,9 @@ android {
         getByName("release") {
             isDebuggable = false
             isMinifyEnabled = false
+            ndk {
+                abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+            }
             signingConfig = if (releaseSigningConfigured) {
                 signingConfigs.getByName("wearTakRelease")
             } else {

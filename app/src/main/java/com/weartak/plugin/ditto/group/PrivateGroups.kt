@@ -4,6 +4,9 @@ package com.weartak.plugin.ditto.group
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import com.weartak.plugin.ditto.document.DittoReplayPolicy
+import com.weartak.plugin.ditto.document.DittoMapDocument
+import com.weartak.plugin.ditto.document.DittoTrackDocument
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -14,8 +17,6 @@ import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
-import com.weartak.plugin.ditto.document.DittoMapDocument
-import com.weartak.plugin.ditto.document.DittoTrackDocument
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.Mac
@@ -68,16 +69,46 @@ internal class AtomicGroupBlobStore(file: File) : GroupBlobStore {
     }
 }
 
-private const val MAX_STATE_BYTES = 64 * 1024
+private const val MAX_STATE_BYTES = 2 * 1024 * 1024
 private const val MAX_GROUPS = 20
+private const val MAX_REPLAY_RECORDS = 8192
 internal const val COMMUNITY = "community"
 private val groupIdPattern = Regex("[0-9a-f]{32}")
+private val replayKeyPattern = Regex("[0-9a-f]{64}")
 private val b64 = Base64.getEncoder()
 private val b64Decoder = Base64.getDecoder()
 
 internal data class GroupOption(val id: String, val label: String)
 
 internal class StalePublication : IllegalStateException("Prepared output belongs to a previous group selection")
+internal class StaleReplayScope : IllegalStateException("Replay scope belongs to a previous group selection")
+
+internal class ReplayScope internal constructor(
+    internal val groupId: String,
+    internal val generation: Long,
+    internal val owner: Any,
+) {
+    override fun toString(): String = "ReplayScope(redacted)"
+}
+
+internal class ReplayAdmission internal constructor(
+    internal val scope: ReplayScope,
+    internal val key: String,
+    internal val watermark: DittoReplayPolicy.Watermark,
+    internal val expired: Boolean,
+    internal val previous: DittoReplayPolicy.Watermark?,
+) {
+    private var recorded = false
+
+    @Synchronized
+    internal fun claim(): Boolean {
+        if (recorded) return false
+        recorded = true
+        return true
+    }
+
+    override fun toString(): String = "ReplayAdmission(redacted)"
+}
 
 internal class PreparedPublication internal constructor(
     internal val generation: Long,
@@ -108,11 +139,18 @@ internal class PrivateGroups private constructor(
         val name: String, val id: String, val key: ByteArray, val sender: String, val sent: Long,
     )
     private class State(
-        val selected: String, val groups: List<Membership>, val generation: Long, val writes: Long,
+        val selected: String,
+        val groups: List<Membership>,
+        val generation: Long,
+        val writes: Long,
+        val replay: Map<String, Map<String, ReplayRecord>> = emptyMap(),
     )
+    private class ReplayRecord(val watermark: DittoReplayPolicy.Watermark)
 
     private var state: State
     private var failed = false
+    private val replayOwner = Any()
+    private val replaySeen = mutableMapOf<String, MutableMap<String, Boolean>>()
 
     init {
         state = if (encryptedState == null) {
@@ -127,6 +165,87 @@ internal class PrivateGroups private constructor(
     fun selected(): String {
         checkHealthy()
         return state.selected
+    }
+
+    @Synchronized
+    fun replayScope(): ReplayScope {
+        checkHealthy()
+        return ReplayScope(state.selected, state.generation, replayOwner)
+    }
+
+    /** Prepare a replay decision; caller must record success only after local ingress succeeds. */
+    @Synchronized
+    fun prepareReplay(
+        scope: ReplayScope,
+        key: String,
+        time: Long,
+        retainUntil: Long,
+        fingerprint: String,
+        sensitive: Boolean,
+        chat: Boolean,
+        expired: Boolean,
+    ): ReplayAdmission? {
+        checkHealthy()
+        checkReplayScope(scope)
+        require(replayKeyPattern.matches(key)) { "Invalid replay key" }
+        val previous = state.replay[scope.groupId]?.get(key)
+        val watermark = DittoReplayPolicy.Watermark(
+            time = time,
+            retainUntil = maxOf(retainUntil, previous?.watermark?.retainUntil ?: retainUntil),
+            fingerprint = fingerprint,
+        )
+        DittoReplayPolicy.parseWatermark(
+            "${watermark.time}:${watermark.retainUntil}:${watermark.fingerprint}",
+        )
+        val seenExpired = previous?.let { replaySeen[scope.groupId]?.get(key) }
+        if (!DittoReplayPolicy.shouldIngest(
+                time, fingerprint, sensitive, chat, expired, previous?.watermark, seenExpired,
+            )
+        ) return null
+        return ReplayAdmission(scope, key, watermark, expired, previous?.watermark)
+    }
+
+    /** Call only after corresponding local ingress has completed successfully. */
+    @Synchronized
+    fun recordIngressSuccess(admission: ReplayAdmission, nowMillis: Long) {
+        checkHealthy()
+        checkReplayScope(admission.scope)
+        require(nowMillis in 1..253402300799999L) { "Invalid replay journal time" }
+        DittoReplayPolicy.parseWatermark(
+            "${admission.watermark.time}:${admission.watermark.retainUntil}:" +
+                admission.watermark.fingerprint,
+        )
+        check(state.replay[admission.scope.groupId]?.get(admission.key)?.watermark == admission.previous) {
+            "Replay admission superseded"
+        }
+
+        var records = state.replay
+        val existing = records[admission.scope.groupId]?.containsKey(admission.key) == true
+        if (!existing && records.values.sumOf { it.size } >= MAX_REPLAY_RECORDS) {
+            records = records.mapValues { (_, entries) ->
+                entries.filterValues { it.watermark.retainUntil > nowMillis }
+            }.filterValues { it.isNotEmpty() }
+            check(records.values.sumOf { it.size } < MAX_REPLAY_RECORDS) {
+                "Ditto replay journal full"
+            }
+        }
+
+        val groupRecords = records[admission.scope.groupId].orEmpty().toMutableMap()
+        groupRecords[admission.key] = ReplayRecord(admission.watermark)
+        records = records.toMutableMap().apply { put(admission.scope.groupId, groupRecords) }
+        check(admission.claim()) { "Replay admission already recorded" }
+        update(State(
+            state.selected,
+            state.groups,
+            state.generation,
+            state.writes,
+            records,
+        ))
+        replaySeen.entries.toList().forEach { (groupId, seen) ->
+            seen.keys.retainAll(records[groupId]?.keys.orEmpty())
+            if (seen.isEmpty()) replaySeen.remove(groupId)
+        }
+        replaySeen.getOrPut(admission.scope.groupId) { mutableMapOf() }[admission.key] = admission.expired
     }
 
     @Synchronized
@@ -178,7 +297,9 @@ internal class PrivateGroups private constructor(
         val group = Membership(name, idText, key.copyOf(), sender, 0)
         val selected = if (select) idText else state.selected
         val generation = if (select && selected != state.selected) state.generation + 1 else state.generation
-        update(State(selected, state.groups + group, generation, state.writes))
+        val selectionChanged = selected != state.selected
+        update(State(selected, state.groups + group, generation, state.writes, state.replay))
+        if (selectionChanged) replaySeen.clear()
     }
 
     @Synchronized
@@ -187,7 +308,8 @@ internal class PrivateGroups private constructor(
         require(id == COMMUNITY || state.groups.any { it.id == id }) { "Unknown group" }
         if (state.selected != id) {
             checkCanAdvanceGeneration()
-            update(State(id, state.groups, state.generation + 1, state.writes))
+            update(State(id, state.groups, state.generation + 1, state.writes, state.replay))
+            replaySeen.clear()
         }
     }
 
@@ -213,6 +335,7 @@ internal class PrivateGroups private constructor(
             state.groups.map { if (it.id == group.id) updated else it },
             state.generation,
             state.writes,
+            state.replay,
         ))
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, senderKey(group.key, group.id, group.sender))
@@ -304,19 +427,41 @@ internal class PrivateGroups private constructor(
     private fun persist(value: State): State {
         try {
             check(value.writes < MAX_STORAGE_WRITES) { "Private group storage limit reached" }
-            val next = State(value.selected, value.groups, value.generation, value.writes + 1)
+            check(value.replay.values.sumOf { it.size } <= MAX_REPLAY_RECORDS) {
+                "Ditto replay journal full"
+            }
+            val next = State(
+                value.selected,
+                value.groups,
+                value.generation,
+                value.writes + 1,
+                value.replay,
+            )
             val groups = JSONArray()
             next.groups.forEach {
                 groups.put(JSONObject().put("name", it.name).put("id", it.id)
                     .put("key", b64.encodeToString(it.key)).put("sender", it.sender).put("sent", it.sent))
             }
-            val json = JSONObject().put("version", 3).put("selected", next.selected).put("groups", groups)
+            val replay = JSONArray()
+            next.replay.toSortedMap().forEach { (groupId, entries) ->
+                entries.toSortedMap().forEach { (key, record) ->
+                    replay.put(JSONObject()
+                        .put("group", groupId)
+                        .put("key", key)
+                        .put("time", record.watermark.time)
+                        .put("retainUntil", record.watermark.retainUntil)
+                        .put("fingerprint", record.watermark.fingerprint))
+                }
+            }
+            val json = JSONObject().put("version", 4).put("selected", next.selected).put("groups", groups)
                 .put("generation", next.generation).put("writes", next.writes)
+                .put("replay", replay)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, wrappingKey)
             cipher.updateAAD(STATE_AAD)
             val encrypted = cipher.doFinal(json.toString().toByteArray(Charsets.UTF_8))
             check(cipher.iv.size == 12) { "Invalid storage nonce" }
+            check(encrypted.size + 13 <= MAX_STATE_BYTES) { "Group state too large" }
             storage.write(byteArrayOf(1) + cipher.iv + encrypted)
             return next
         } catch (_: Exception) {
@@ -341,7 +486,11 @@ internal class PrivateGroups private constructor(
                 (version == 2 &&
                     root.keys().asSequence().toSet() == setOf("version", "selected", "groups", "locked", "writes")) ||
                     (version == 3 &&
-                        root.keys().asSequence().toSet() == setOf("version", "selected", "groups", "generation", "writes")),
+                        root.keys().asSequence().toSet() == setOf("version", "selected", "groups", "generation", "writes")) ||
+                    (version == 4 &&
+                        root.keys().asSequence().toSet() == setOf(
+                            "version", "selected", "groups", "generation", "writes", "replay",
+                        )),
             )
             val selected = root.getString("selected")
             val generation = if (version == 2) 0 else root.getLong("generation")
@@ -364,7 +513,27 @@ internal class PrivateGroups private constructor(
             }
             require(groups.map { it.id }.distinct().size == groups.size)
             require(selected == COMMUNITY || groups.any { it.id == selected })
-            return State(selected, groups, generation, writes) to (version == 2)
+            val replay = mutableMapOf<String, MutableMap<String, ReplayRecord>>()
+            if (version == 4) {
+                val replayArray = root.getJSONArray("replay")
+                require(replayArray.length() <= MAX_REPLAY_RECORDS)
+                repeat(replayArray.length()) { index ->
+                    val item = replayArray.getJSONObject(index)
+                    require(item.keys().asSequence().toSet() ==
+                        setOf("group", "key", "time", "retainUntil", "fingerprint"))
+                    val groupId = item.getString("group")
+                    val key = item.getString("key")
+                    require((groupId == COMMUNITY || groups.any { it.id == groupId }) &&
+                        replayKeyPattern.matches(key))
+                    val watermark = DittoReplayPolicy.parseWatermark(
+                        "${item.getLong("time")}:${item.getLong("retainUntil")}:" +
+                            item.getString("fingerprint"),
+                    )
+                    val groupRecords = replay.getOrPut(groupId) { mutableMapOf() }
+                    require(groupRecords.put(key, ReplayRecord(watermark)) == null)
+                }
+            }
+            return State(selected, groups, generation, writes, replay) to (version < 4)
         } catch (_: Exception) {
             throw IllegalStateException("Invalid private group state")
         } finally {
@@ -374,6 +543,14 @@ internal class PrivateGroups private constructor(
 
     private fun checkHealthy() {
         check(!failed) { "Private group storage unavailable" }
+    }
+
+    private fun checkReplayScope(scope: ReplayScope) {
+        if (scope.owner !== replayOwner ||
+            scope.groupId != state.selected || scope.generation != state.generation
+        ) {
+            throw StaleReplayScope()
+        }
     }
 
     companion object {

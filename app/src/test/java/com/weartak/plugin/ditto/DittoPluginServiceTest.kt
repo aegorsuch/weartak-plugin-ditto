@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.content.pm.PermissionInfo
 import android.content.pm.Signature
 import android.os.Binder
+import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.os.RemoteException
@@ -15,6 +16,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.Switch
 import com.weartak.plugin.ditto.group.GroupBlobStore
 import com.weartak.plugin.ditto.group.GroupSettings
 import com.weartak.plugin.ditto.group.PrivateGroups
@@ -189,14 +191,10 @@ class DittoPluginServiceTest {
             .bufferedReader()
             .use { it.readText() }
         assertTrue(dittoLicense.startsWith("Ditto Binary License"))
-        val dittoPermissions = setOf(
-            "android.permission.BLUETOOTH",
-            "android.permission.BLUETOOTH_ADMIN",
+        val dittoPermissions = mutableSetOf(
             "android.permission.BLUETOOTH_ADVERTISE",
             "android.permission.BLUETOOTH_CONNECT",
             "android.permission.BLUETOOTH_SCAN",
-            "android.permission.ACCESS_FINE_LOCATION",
-            "android.permission.ACCESS_COARSE_LOCATION",
             "android.permission.INTERNET",
             "android.permission.ACCESS_WIFI_STATE",
             "android.permission.ACCESS_NETWORK_STATE",
@@ -205,7 +203,17 @@ class DittoPluginServiceTest {
             "android.permission.CHANGE_WIFI_STATE",
             "android.permission.NEARBY_WIFI_DEVICES",
         )
-        assertTrue(packageInfo.requestedPermissions.orEmpty().none { it in dittoPermissions })
+        if (Build.VERSION.SDK_INT <= 30) {
+            dittoPermissions += "android.permission.BLUETOOTH"
+            dittoPermissions += "android.permission.BLUETOOTH_ADMIN"
+            dittoPermissions += "android.permission.ACCESS_COARSE_LOCATION"
+        }
+        if (Build.VERSION.SDK_INT <= 32) dittoPermissions += "android.permission.ACCESS_FINE_LOCATION"
+        val requestedPermissions = packageInfo.requestedPermissions.orEmpty().toSet()
+        assertEquals(
+            dittoPermissions + "${app.packageName}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+            requestedPermissions,
+        )
     }
 
     @Test
@@ -223,10 +231,18 @@ class DittoPluginServiceTest {
                 is ViewGroup -> (0 until view.childCount).flatMap { buttons(view.getChildAt(it)) }
                 else -> emptyList()
             }
+            fun switches(view: View): List<Switch> = when (view) {
+                is Switch -> listOf(view)
+                is ViewGroup -> (0 until view.childCount).flatMap { switches(view.getChildAt(it)) }
+                else -> emptyList()
+            }
             val labels = buttons(activity.findViewById(android.R.id.content))
             assertTrue(labels.contains(activity.getString(R.string.group_create)))
             assertTrue(labels.contains(activity.getString(R.string.group_import)))
             assertTrue(labels.contains(activity.getString(R.string.group_export)))
+            val meshToggle = switches(activity.findViewById(android.R.id.content)).single()
+            assertEquals(activity.getString(R.string.mesh_permission_opt_in), meshToggle.text)
+            assertFalse(meshToggle.isChecked)
             val saved = Bundle()
             controller.saveInstanceState(saved)
             assertEquals("Lake", saved.getString("pendingImportName"))

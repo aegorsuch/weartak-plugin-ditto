@@ -3,6 +3,12 @@
     <string name="group_inactive_notice">Local groups only. Ditto is not running. Other routes are not private.</string>
     <string name="group_loading">Loading local groups...</string>
     <string name="group_local_only">Selection is local. No mesh is active.</string>
+    <string name="mesh_permission_opt_in">Request Ditto mesh permissions</string>
+    <string name="mesh_permission_inactive">Mesh is off. No permission prompt or sync active.</string>
+    <string name="mesh_permission_missing">Required mesh permissions are missing. No sync is active.</string>
+    <string name="mesh_permission_ready_inactive">Permissions granted. Sync remains inactive.</string>
+    <string name="mesh_permission_opted_out">Permission opt-in off. Android grants remain; sync is inactive.</string>
+    <string name="mesh_permission_request_error">Could not request mesh permissions. Sync remains inactive.</string>
     <string name="group_name_hint">Group name</string>
     <string name="group_create">Create and select</string>
     <string name="group_import">Import invitation</string>
