@@ -185,28 +185,31 @@ necessarily include this source change.
 
 The core currently uses Ditto `4.14.6`. The plugin now includes that licensed SDK as a
 production dependency, and the APK packages the SDK-backed runtime handle plus
-`app/src/main/assets/licenses/ditto-binary-license.txt`. The plugin service owns a
-fail-closed runtime controller: start is always blocked, and the production service
-creates no Ditto instance, reads no identity, configures no transport, and publishes no
-data. SDK-declared mesh and network permissions are removed from the merged app
-manifest until permission handling is implemented. The SDK-backed handle is compiled
-against Ditto `4.14.6`; unit tests exclude the vendor artifact at runtime and use only a
+`app/src/main/assets/licenses/ditto-binary-license.txt`. The production binder uses a
+fail-closed runtime owner with no factory and a closed activation gate, so it creates no
+Ditto instance, reads no identity, configures no transport, and publishes no data.
+SDK-declared mesh and network permissions are removed from the merged app manifest
+until permission handling is implemented. The SDK-backed handle is compiled against
+Ditto `4.14.6`; unit tests exclude the vendor artifact at runtime and use only a
 synthetic test double. Device installation, SDK class loading, and radio behavior have
 not been verified. Core retains its existing Ditto runtime.
 The existing host SDK provides lifecycle, generic CoT/chat transport, route status,
 and hosted UI. It does not provide a native Ditto document/store,
 point-ledger, PDL migration, or host-owned mesh-runtime contract.
 
-The service-owned runtime controller permanently rejects start requests. Its
-SDK-backed handle delegates `stopSync()` and `close()` only for an explicitly supplied
-Ditto instance; the service supplies none. Each cleanup request is recorded before
-calling the SDK and is never repeated, including after an error. The result records
-local call outcomes only; it is not proof of quiescence or permission to hand off
-ownership. This is not an exclusive ownership lock. Exception details are not logged.
-The plugin has no instance factory, identity provisioning, transport registration,
-or radio startup. It does not close core's monitors, workers, observers, subscriptions
-or instance: those objects and their host ownership contracts do not exist here.
-Synthetic tests exercise local controller behavior, not SDK or network behavior.
+The SDK-backed factory requires explicit SharedKey provisioning and uses the public
+identity-based constructor supported by Ditto `4.14.6`. That API derives configuration
+from the identity; exact parity with the core's database and connect settings remains
+unverified, so the factory is not wired into the production binder. Its handle delegates
+`stopSync()` and `close()` only for an explicitly supplied Ditto instance; the service
+supplies none. Each cleanup request is recorded before calling the SDK and is never
+repeated, including after an error. The result records local call outcomes only; it is
+not proof of quiescence or permission to hand off ownership. This is not an exclusive
+ownership lock. Exception details are not logged. The production binder has no identity
+source, transport registration, or radio startup. It does not close core's monitors,
+workers, observers, subscriptions or instance: those objects and their host ownership
+contracts do not exist here. Synthetic tests exercise local controller behavior, not SDK
+or network behavior.
 Keep real initialization, synchronization, identity reads, and publication disabled
 until authenticated exclusive ownership, provisioning/migration, and crash recovery
 are verified.
