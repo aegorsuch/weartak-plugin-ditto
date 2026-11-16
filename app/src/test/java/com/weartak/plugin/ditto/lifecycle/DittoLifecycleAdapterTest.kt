@@ -95,25 +95,24 @@ class DittoLifecycleAdapterTest {
     }
 
     @Test
-    fun `SDK bridge delegates to synthetic test double without enabling start`() {
+    fun `SDK runtime bridge delegates stop and close without enabling start`() {
         val fakeType = Class.forName("live.ditto.Ditto")
         val fake = fakeType.getConstructor().newInstance()
-        val bridgeType = Class.forName("com.weartak.plugin.ditto.lifecycle.DittoSdkStopCall")
-        val bridge = bridgeType.getDeclaredConstructor(fakeType).newInstance(fake) as SyncStopCall
-        val adapter = DittoLifecycleAdapter(bridge)
+        val bridgeType = Class.forName(
+            "com.weartak.plugin.ditto.lifecycle.DittoSdkRuntimeHandle",
+        )
+        val bridge = bridgeType.getDeclaredConstructor(fakeType).newInstance(fake) as DittoRuntimeHandle
+        val owner = DittoRuntimeOwner(bridge)
 
-        assertEquals(StartSyncResult.BLOCKED_MISSING_PROVISIONING_AND_HANDOFF, adapter.requestStart())
+        assertEquals(StartSyncResult.BLOCKED_MISSING_PROVISIONING_AND_HANDOFF, owner.requestStart())
         assertEquals(0, fakeType.getField("stopCalls").getInt(fake))
-        fakeType.getField("failStop").setBoolean(fake, true)
-        val result = adapter.requestStop()
-        assertTrue(result is StopSyncResult.CallFailed)
-        fakeType.getField("failStop").setBoolean(fake, false)
-        assertSame(result, adapter.requestStop())
-        assertEquals(1, fakeType.getField("stopCalls").getInt(fake))
+        assertEquals(0, fakeType.getField("closeCalls").getInt(fake))
 
-        val otherFake = fakeType.getConstructor().newInstance()
-        val otherBridge = bridgeType.getDeclaredConstructor(fakeType).newInstance(otherFake) as SyncStopCall
-        assertEquals(StopSyncResult.CallReturnedWithoutError, DittoLifecycleAdapter(otherBridge).requestStop())
-        assertEquals(1, fakeType.getField("stopCalls").getInt(otherFake))
+        val result = owner.releaseLocalResources() as DittoRuntimeReleaseResult.CallsCompleted
+        assertEquals(StopSyncResult.CallReturnedWithoutError, result.stopSync)
+        assertEquals(DittoCloseResult.CallReturnedWithoutError, result.close)
+        assertEquals(1, fakeType.getField("stopCalls").getInt(fake))
+        assertEquals(1, fakeType.getField("closeCalls").getInt(fake))
+        assertSame(result, owner.releaseLocalResources())
     }
 }

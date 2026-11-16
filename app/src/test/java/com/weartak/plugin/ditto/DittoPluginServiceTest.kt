@@ -185,6 +185,10 @@ class DittoPluginServiceTest {
             PackageManager.GET_META_DATA or PackageManager.GET_PERMISSIONS,
         )
         assertTrue(packageInfo.applicationInfo!!.metaData.getBoolean("com.google.android.wearable.standalone"))
+        val dittoLicense = app.assets.open("licenses/ditto-binary-license.txt")
+            .bufferedReader()
+            .use { it.readText() }
+        assertTrue(dittoLicense.startsWith("Ditto Binary License"))
         val dittoPermissions = setOf(
             "android.permission.BLUETOOTH",
             "android.permission.BLUETOOTH_ADMIN",

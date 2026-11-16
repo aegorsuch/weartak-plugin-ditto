@@ -244,6 +244,7 @@ val dittoTestFakeJar by tasks.registering(Jar::class) {
 dependencies {
     implementation(files(sdkFile))
     implementation(files(hostServicesSdkFile))
+    implementation("live.ditto:ditto:4.14.6")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
     testCompileOnly("live.ditto:ditto:4.14.6")
@@ -251,6 +252,12 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     testImplementation("org.robolectric:robolectric:4.13")
+}
+
+configurations.configureEach {
+    if (name.endsWith("UnitTestRuntimeClasspath")) {
+        exclude(group = "live.ditto", module = "ditto")
+    }
 }
 
 val cleanupReleaseSigningInput = tasks.register("cleanupReleaseSigningInput") {

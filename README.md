@@ -2,10 +2,10 @@
 
 ## Purpose and Capabilities
 
-Development-only Wear OS plugin scaffold for a future Ditto extraction. It exposes the
-WearTAK plugin lifecycle service but **does not start Ditto or provide mesh, CoT, chat,
-data exchange, or provisioning**. A plugin-owned watch screen provides local group
-controls; the runtime remains unavailable.
+Development-only Wear OS plugin scaffold for a future Ditto extraction. It bundles the
+licensed Ditto Android SDK but **does not initialize or start Ditto, or provide mesh,
+CoT, chat, data exchange, or provisioning**. A plugin-owned watch screen provides local
+group controls; the runtime remains unavailable.
 
 The watch is standalone; the ATAK Companion plugin is not required.
 
@@ -183,31 +183,33 @@ necessarily include this source change.
 
 ## Developer Notes
 
-The core currently uses Ditto `4.14.6`. Unit tests compile the separate SDK bridge
-source against that Maven Central SDK, but the debug APK contains neither the
-bridge nor the SDK and does not merge its mesh permissions. The debug APK cannot
-run Ditto. Device installation and class loading have not been verified.
-Core retains its existing Ditto runtime.
+The core currently uses Ditto `4.14.6`. The plugin now includes that licensed SDK as a
+production dependency, and the APK packages the SDK-backed runtime handle plus
+`app/src/main/assets/licenses/ditto-binary-license.txt`. The plugin service owns a
+fail-closed runtime controller: start is always blocked, and the production service
+creates no Ditto instance, reads no identity, configures no transport, and publishes no
+data. SDK-declared mesh and network permissions are removed from the merged app
+manifest until permission handling is implemented. The SDK-backed handle is compiled
+against Ditto `4.14.6`; unit tests exclude the vendor artifact at runtime and use only a
+synthetic test double. Device installation, SDK class loading, and radio behavior have
+not been verified. Core retains its existing Ditto runtime.
 The existing host SDK provides lifecycle, generic CoT/chat transport, route status,
 and hosted UI. It does not provide a native Ditto document/store,
 point-ledger, PDL migration, or host-owned mesh-runtime contract.
 
-An unwired lifecycle adapter permanently rejects start requests. The separately
-compiled SDK-backed stop bridge targets a caller-supplied Ditto instance and is
-excluded from the APK. Unit tests execute that bridge against a synthetic class,
-not the SDK runtime. As in core, each adapter marks stop requested under a lock
-before calling `stopSync()` and does not repeat the call after an error. It returns
-the recorded call outcome, unlike core's swallowed `DittoError`; that outcome is
-historical, not proof of current state. This is not an exclusive ownership lock.
-Callers must not
-log exception details that may contain sensitive data. A successful `stopSync()`
-return is not proof of quiescence or permission to hand off ownership. The adapter
-does not create an SDK instance, provision identity, register a transport, or start
-a radio. It does not close core's monitors, workers, observers, subscriptions or
-instance: those objects and their host ownership contracts do not exist here. It
-must not be wired until authenticated exclusive ownership, provisioning,
-and positive shutdown acknowledgement are established. Synthetic tests exercise
-the adapter's own behavior, not SDK or network behavior.
+The service-owned runtime controller permanently rejects start requests. Its
+SDK-backed handle delegates `stopSync()` and `close()` only for an explicitly supplied
+Ditto instance; the service supplies none. Each cleanup request is recorded before
+calling the SDK and is never repeated, including after an error. The result records
+local call outcomes only; it is not proof of quiescence or permission to hand off
+ownership. This is not an exclusive ownership lock. Exception details are not logged.
+The plugin has no instance factory, identity provisioning, transport registration,
+or radio startup. It does not close core's monitors, workers, observers, subscriptions
+or instance: those objects and their host ownership contracts do not exist here.
+Synthetic tests exercise local controller behavior, not SDK or network behavior.
+Keep real initialization, synchronization, identity reads, and publication disabled
+until authenticated exclusive ownership, provisioning/migration, and crash recovery
+are verified.
 
 An unwired power policy mirrors core's off-wrist, low-battery, sleep and power-save
 suppression, charging and alert overrides, and 60-second alert grace. Its inputs are

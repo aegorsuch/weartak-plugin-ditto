@@ -8,6 +8,11 @@ import android.os.Bundle
 import android.util.Log
 import com.weartak.plugin.ditto.group.GroupSettings
 import com.weartak.plugin.ditto.group.PrivateGroups
+import com.weartak.plugin.ditto.lifecycle.DittoCloseResult
+import com.weartak.plugin.ditto.lifecycle.DittoRuntimeOwner
+import com.weartak.plugin.ditto.lifecycle.DittoRuntimeReleaseResult
+import com.weartak.plugin.ditto.lifecycle.StartSyncResult
+import com.weartak.plugin.ditto.lifecycle.StopSyncResult
 import com.weartak.plugin.sdk.WearTakPluginContract
 import com.weartak.plugin.sdk.aidl.IWearTakHostCallback
 import com.weartak.plugin.sdk.aidl.IWearTakPlugin
@@ -38,6 +43,7 @@ internal class DittoPluginBinder(
     routeExecutor: ExecutorService = Executors.newSingleThreadExecutor(),
     private val communityControl: CommunityControlCandidate =
         CommunityControlCandidate(CommunityHostTrust(context.packageManager)::matches),
+    private val runtimeOwner: DittoRuntimeOwner = DittoRuntimeOwner(),
     groupFactory: () -> PrivateGroups = { PrivateGroups.forApp(context) },
 ) : IWearTakPlugin.Stub() {
     private val lock = Any()
@@ -111,17 +117,21 @@ internal class DittoPluginBinder(
 
     override fun startPlugin() = withHost {
         communityControl.start()
-        Log.w(TAG, UNAVAILABLE)
+        if (runtimeOwner.requestStart() == StartSyncResult.BLOCKED_MISSING_PROVISIONING_AND_HANDOFF) {
+            Log.w(TAG, UNAVAILABLE)
+        }
         Unit
     }
 
     override fun stopPlugin() = withHost {
         communityControl.invalidate()
+        releaseRuntime()
         dispatch(PluginLifecycleEvent.HOST_STOPPED)
     }
 
     override fun shutdownPlugin() = withHost {
         communityControl.invalidate()
+        releaseRuntime()
         dispatch(PluginLifecycleEvent.HOST_SHUTDOWN)
         routeStatus.shutdown()
     }
@@ -172,8 +182,19 @@ internal class DittoPluginBinder(
         closed = true
         host = null
         communityControl.close()
+        releaseRuntime()
         routeStatus.close()
         lifecycle.dispatch(PluginLifecycleEvent.RESET)
+    }
+
+    private fun releaseRuntime() {
+        val result = runtimeOwner.releaseLocalResources()
+        if (result is DittoRuntimeReleaseResult.CallsCompleted &&
+            (result.stopSync is StopSyncResult.CallFailed ||
+                result.close is DittoCloseResult.CallFailed)
+        ) {
+            Log.w(TAG, "Ditto runtime cleanup failed")
+        }
     }
 
     private fun checkOpen() {
