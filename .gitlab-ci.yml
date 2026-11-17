@@ -7,6 +7,7 @@ before_script: []
 
 workflow:
   rules:
+    - if: '$CI_PIPELINE_SOURCE == "pipeline"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
       when: never
@@ -41,6 +42,8 @@ plugin_tests:
     - |
       set -eu
       unset WEARTAK_RELEASE_KEYSTORE_B64 RELEASE_STORE_PASSWORD RELEASE_KEY_ALIAS RELEASE_KEY_PASSWORD
+      sh ci/test_wear_version.sh
+      sh ci/prepare_wear_version.sh
       GRADLE_ROOT="$( ( unset CI_JOB_TOKEN; sh ci/prepare_gradle.sh ) )"
       trap 'rm -rf "$GRADLE_ROOT"' EXIT
       export GRADLE_USER_HOME="$GRADLE_ROOT/gradle-home"
@@ -58,6 +61,7 @@ plugin_tests:
     reports:
       junit: app/build/test-results/testDebugUnitTest/*.xml
   rules:
+    - if: '$CI_PIPELINE_SOURCE == "pipeline"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH'
     - if: '$CI_COMMIT_TAG'
@@ -75,6 +79,10 @@ signed_default_branch_build:
       [ -n "${RELEASE_STORE_PASSWORD:-}" ] || { echo "ERROR: RELEASE_STORE_PASSWORD missing"; exit 1; }
       [ -n "${RELEASE_KEY_ALIAS:-}" ] || { echo "ERROR: RELEASE_KEY_ALIAS missing"; exit 1; }
       [ -n "${RELEASE_KEY_PASSWORD:-}" ] || { echo "ERROR: RELEASE_KEY_PASSWORD missing"; exit 1; }
+      (
+        unset WEARTAK_RELEASE_KEYSTORE_B64 RELEASE_STORE_PASSWORD RELEASE_KEY_ALIAS RELEASE_KEY_PASSWORD
+        sh ci/prepare_wear_version.sh
+      )
       GRADLE_ROOT="$(
         (
           unset CI_JOB_TOKEN WEARTAK_RELEASE_KEYSTORE_B64 RELEASE_STORE_PASSWORD RELEASE_KEY_ALIAS RELEASE_KEY_PASSWORD

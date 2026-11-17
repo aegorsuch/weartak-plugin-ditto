@@ -183,14 +183,14 @@ necessarily include this source change.
 
 ## Developer Notes
 
-The core currently uses Ditto `4.14.6`. The plugin now includes that licensed SDK as a
+The core baseline uses Ditto `4.14.6`. The plugin includes Ditto `4.14.7` as a
 production dependency, and the APK packages the SDK-backed runtime handle plus
 `app/src/main/assets/licenses/ditto-binary-license.txt`. The plugin service owns a
 fail-closed runtime controller: start is always blocked, and the production service
 creates no Ditto instance, reads no identity, configures no transport, and publishes no
 data. SDK-declared mesh and network permissions are removed from the merged app
 manifest until permission handling is implemented. The SDK-backed handle is compiled
-against Ditto `4.14.6`; unit tests exclude the vendor artifact at runtime and use only a
+against Ditto `4.14.7`; unit tests exclude the vendor artifact at runtime and use only a
 synthetic test double. Device installation, SDK class loading, and radio behavior have
 not been verified. Core retains its existing Ditto runtime.
 The existing host SDK provides lifecycle, generic CoT/chat transport, route status,
@@ -235,7 +235,7 @@ observations: core derives Wi-Fi and validated internet from Android network
 capabilities. Wi-Fi Direct is not treated as Wi-Fi Aware. Missing observations
 must not be silently treated as known values; no network callback or SDK transport
 configuration is connected here. A separate SDK transport-config adapter compiles
-against Ditto 4.14.6 and is exercised against a synthetic test double; like the stop
+against Ditto 4.14.7 and is exercised against a synthetic test double; like the stop
 bridge, it is excluded from the APK and cannot start or configure a live runtime.
 
 Local group groundwork stores a single Community/private selection and memberships
