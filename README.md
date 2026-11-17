@@ -42,8 +42,8 @@ Undocumented.
 
 ## Ports Required
 
-This scaffold declares no network permissions or listeners. Future Ditto networking
-requirements have not been established for the separate plugin.
+The pinned Ditto SDK contributes BLE, location, nearby Wi-Fi, network-state and
+multicast permissions. No custom listener or server is declared.
 
 ## Equipment Required
 
@@ -54,7 +54,10 @@ watch is required for eventual device validation.
 ## Equipment Supported
 
 The manifest requires watch hardware and Android API 30 or later. No watch or host
-version has been validated.
+version has been validated. Release APKs include `armeabi-v7a` and `arm64-v8a`
+native libraries for physical ARM watches. Debug APKs also retain `x86` and
+`x86_64` libraries for emulator development. Builds still produce a single APK
+per variant; CI artifact paths and release signing checks are unchanged.
 
 ## Compilation
 
@@ -185,28 +188,35 @@ necessarily include this source change.
 
 The core baseline uses Ditto `4.14.6`. The plugin includes Ditto `4.14.7` as a
 production dependency, and the APK packages the SDK-backed runtime handle plus
-`app/src/main/assets/licenses/ditto-binary-license.txt`. The plugin service owns a
-fail-closed runtime controller: start is always blocked, and the production service
-creates no Ditto instance, reads no identity, configures no transport, and publishes no
-data. SDK-declared mesh and network permissions are removed from the merged app
-manifest until permission handling is implemented. The SDK-backed handle is compiled
-against Ditto `4.14.7`; unit tests exclude the vendor artifact at runtime and use only a
-synthetic test double. Device installation, SDK class loading, and radio behavior have
-not been verified. Core retains its existing Ditto runtime.
+`app/src/main/assets/licenses/ditto-binary-license.txt`. The production binder uses a
+fail-closed runtime owner with no factory and a closed activation gate, so it creates no
+Ditto instance, reads no identity, configures no transport, and publishes no data.
+The SDK-declared mesh and network permissions remain in the merged app manifest.
+The group screen has an explicit permission opt-in and requests only permissions
+reported missing by Ditto 4.14.7; grants and revocations are rechecked after the
+permission result and on resume. This is permission handling only: no Ditto instance
+or sync starts, and runtime identity/ownership gates remain closed. The SDK-backed
+handle is compiled against Ditto `4.14.7`; unit tests exclude the vendor artifact at
+runtime and use only a synthetic test double. Device installation, SDK class loading,
+permission UX and radio behavior have not been verified. Core retains its existing
+Ditto runtime.
 The existing host SDK provides lifecycle, generic CoT/chat transport, route status,
 and hosted UI. It does not provide a native Ditto document/store,
 point-ledger, PDL migration, or host-owned mesh-runtime contract.
 
-The service-owned runtime controller permanently rejects start requests. Its
-SDK-backed handle delegates `stopSync()` and `close()` only for an explicitly supplied
-Ditto instance; the service supplies none. Each cleanup request is recorded before
-calling the SDK and is never repeated, including after an error. The result records
-local call outcomes only; it is not proof of quiescence or permission to hand off
-ownership. This is not an exclusive ownership lock. Exception details are not logged.
-The plugin has no instance factory, identity provisioning, transport registration,
-or radio startup. It does not close core's monitors, workers, observers, subscriptions
-or instance: those objects and their host ownership contracts do not exist here.
-Synthetic tests exercise local controller behavior, not SDK or network behavior.
+The SDK-backed factory requires explicit SharedKey provisioning and uses the public
+identity-based constructor supported by Ditto `4.14.7`. That API derives configuration
+from the identity; exact parity with the core's database and connect settings remains
+unverified, so the factory is not wired into the production binder. Its handle delegates
+`stopSync()` and `close()` only for an explicitly supplied Ditto instance; the service
+supplies none. Each cleanup request is recorded before calling the SDK and is never
+repeated, including after an error. The result records local call outcomes only; it is
+not proof of quiescence or permission to hand off ownership. This is not an exclusive
+ownership lock. Exception details are not logged. The production binder has no identity
+source, transport registration, or radio startup. It does not close core's monitors,
+workers, observers, subscriptions or instance: those objects and their host ownership
+contracts do not exist here. Synthetic tests exercise local controller behavior, not SDK
+or network behavior.
 Keep real initialization, synchronization, identity reads, and publication disabled
 until authenticated exclusive ownership, provisioning/migration, and crash recovery
 are verified.
@@ -255,8 +265,8 @@ contain credentials. This plugin provides no transfer channel or invitation
 authentication. The binary invitation is exactly 52 bytes: ASCII `WTG1`, a 16-byte
 opaque group ID, and a 32-byte group data key. Names are entered locally.
 Invitations and group keys are separate from, and do not replace, community PDL
-credentials. Version-2 local state is upgraded on open, preserving memberships
-and counters; older or invalid formats fail closed.
+credentials. Version-2 and version-3 local state is upgraded on open, preserving
+memberships and counters; older or invalid formats fail closed.
 
 An unwired AES-GCM envelope encrypts synthetic chat, location and map documents
 using the separate 256-bit group data key. It authenticates format, group ID,
@@ -280,12 +290,24 @@ the limits. A member can also create other sender IDs. These limits are not a
 production nonce-safety guarantee. Local tests use synthetic keys and do not verify
 Android Keystore, filesystem crash durability or a real host/device.
 
-This is not yet private communication: no transport, subscription, delivery,
-group-scoped replay journal, cache, point ledger, outbox, or ownership handoff is
-wired. Thus no connected pending or replay state needs local segregation today;
-future runtime integration must scope those stores by group or reject switching
-while state is pending, and must verify the prepared scope/generation immediately
-before transport release. No local encoding or decryption marks data as delivered.
+Encrypted local state version 4 also supports a group-scoped replay watermark
+journal capped at 8,192 records. Watermarks persist a caller-supplied 64-hex
+peer/UID key, timestamp, retention bound, and document fingerprint; ephemeral
+seen/expiry state is intentionally not persisted, preserving core's non-chat replay
+rehydration behavior after restart. Admission tokens are bound to the selected
+group, selection generation and live store instance. Superseded admissions cannot
+overwrite newer watermarks. Recording is explicit and persists only after the
+caller reports successful local ingress; storage failures fail closed. At capacity,
+expired records can be pruned; a full unexpired journal rejects the new record
+without consuming its admission. The encrypted file is capped at 2 MiB.
+This API has no receiver caller and cannot establish delivery.
+
+This is not yet private communication: no transport, subscription, receiver,
+delivery, cache, point ledger, outbox, or ownership handoff is wired. The local
+replay journal is disconnected; future runtime integration must scope connected
+pending or replay state by group or reject switching while state is pending, and
+must verify the prepared scope/generation immediately before transport release.
+No local encoding or decryption marks data as delivered.
 Existing public encoders remain independently callable and must be gated by the
 eventual dispatcher before runtime activation; pending state must be isolated or
 group switching rejected. Encrypted state has no rollback protection. Encryption
@@ -308,12 +330,13 @@ events stale at or before caller-supplied current time. Decoding alone does not
 perform that check. Unlike core's implicit clock assumption, the check requires
 a positive, representable current time and a valid chat TTL. Unwired replay
 comparison and chat retention calculations mirror core's decisions and query
-strings but do not deliver, persist, subscribe, evict, or migrate state.
-They reject invalid watermark or clock inputs rather than assuming trusted state.
-Core records a replay watermark only after successful ingestion; a persistence
-failure after delivery can still cause redelivery. Safe integration requires an
-explicit delivery and durable-storage contract. Retention also requires persisted
-attempt ordering and exclusive subscription ownership before SDK eviction.
+strings but do not deliver, subscribe, or evict. The encrypted group journal
+persists caller-recorded successful ingress, but is not connected to a receiver
+or subscription. It rejects invalid watermark or clock inputs rather than
+assuming trusted state. As in core, a persistence failure after delivery can
+still cause redelivery. Safe integration requires an explicit delivery and
+durable-storage contract. Retention also requires persisted attempt ordering and
+exclusive subscription ownership before SDK eviction.
 Recipient delivery, mesh, and end-to-end interoperability are not implemented.
 An unwired mapitem/alert encoder maps explicit, privacy-filtered host inputs to
 core aliases. It validates the common v2/CoT envelope, restricts mapitem types to markers
@@ -361,10 +384,11 @@ Core and a future plugin can both receive generic outbound chat, markers, and
 emergencies; avoid registering plugin transport until runtime ownership and
 handoff prevent duplicate publication.
 
-The separate Android package does not inherit core's mesh permissions or DataStore
+The separate Android package does not inherit core's permission grants or DataStore
 configuration. Before any runtime can be enabled, establish secure community identity
-and PDL provisioning/migration, permission handling, host contracts, and lifecycle ownership.
-No placeholder credentials or default PDL are provided.
+and PDL provisioning/migration, validate package-scoped permission UX on device,
+define host contracts, and verify lifecycle ownership. No placeholder credentials or
+default PDL are provided.
 
 The service action and signature-level bind permission follow the
 [WearTAK plugin template](https://git.tak.gov/weartak-plugins/weartak-plugin-template)

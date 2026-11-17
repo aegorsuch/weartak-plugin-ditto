@@ -10,6 +10,7 @@ import java.security.GeneralSecurityException
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Rule
@@ -36,6 +37,19 @@ class PrivateGroupsTest {
     }
 
     private fun group(storage: MemoryBlob): PrivateGroups = PrivateGroups.open(storage, wrappingKey)
+
+    private fun editState(storage: GroupBlobStore, edit: (JSONObject) -> Unit) {
+        val bytes = storage.read()!!
+        val decrypt = Cipher.getInstance("AES/GCM/NoPadding")
+        decrypt.init(Cipher.DECRYPT_MODE, wrappingKey, GCMParameterSpec(128, bytes.copyOfRange(1, 13)))
+        decrypt.updateAAD("weartak-ditto-group-state-v1".toByteArray())
+        val root = JSONObject(String(decrypt.doFinal(bytes.copyOfRange(13, bytes.size))))
+        edit(root)
+        val encrypt = Cipher.getInstance("AES/GCM/NoPadding")
+        encrypt.init(Cipher.ENCRYPT_MODE, wrappingKey)
+        encrypt.updateAAD("weartak-ditto-group-state-v1".toByteArray())
+        storage.write(byteArrayOf(1) + encrypt.iv + encrypt.doFinal(root.toString().toByteArray()))
+    }
 
     private fun chatXml() =
         "<event version='2.0' uid='synthetic-event' type='b-t-f' how='h-g-i-g-o' " +
@@ -99,6 +113,182 @@ class PrivateGroupsTest {
         assertThrows(IllegalStateException::class.java) {
             groups.encrypt(PrivateContentKind.CHAT, "private".toByteArray())
         }
+    }
+
+    @Test
+    fun `replay watermarks persist by group and rehydrate non-chat once after restart`() {
+        val storage = MemoryBlob()
+        var groups = group(storage)
+        groups.importMembership("First", id, key, select = true)
+        val firstScope = groups.replayScope()
+        val replayKey = "b".repeat(64)
+        val fingerprint = "a".repeat(64)
+        val time = 1_700_000_000_000L
+        val retainUntil = time + 60_000
+
+        val first = groups.prepareReplay(
+            firstScope, replayKey, time, retainUntil, fingerprint,
+            sensitive = false, chat = false, expired = false,
+        )!!
+        val stale = groups.prepareReplay(
+            firstScope, "c".repeat(64), time, retainUntil, fingerprint,
+            sensitive = false, chat = false, expired = false,
+        )!!
+        groups.recordIngressSuccess(first, time)
+        assertNull(groups.prepareReplay(
+            firstScope, replayKey, time, retainUntil, fingerprint,
+            sensitive = false, chat = false, expired = false,
+        ))
+
+        val secondId = ByteArray(16) { (it + 60).toByte() }
+        groups.importMembership("Second", secondId, ByteArray(32) { (it + 70).toByte() }, select = true)
+        val secondScope = groups.replayScope()
+        assertThrows(StaleReplayScope::class.java) {
+            groups.recordIngressSuccess(stale, time)
+        }
+        assertThrows(StaleReplayScope::class.java) {
+            groups.prepareReplay(
+                firstScope, replayKey, time, retainUntil, fingerprint,
+                sensitive = false, chat = false, expired = false,
+            )
+        }
+        val second = groups.prepareReplay(
+            secondScope, replayKey, time, retainUntil, fingerprint,
+            sensitive = false, chat = false, expired = false,
+        )!!
+        groups.recordIngressSuccess(second, time)
+
+        groups = group(storage)
+        val restartedScope = groups.replayScope()
+        assertNull(groups.prepareReplay(
+            restartedScope, replayKey, time, retainUntil, fingerprint,
+            sensitive = false, chat = true, expired = false,
+        ))
+        val rehydrated = groups.prepareReplay(
+            restartedScope, replayKey, time, retainUntil, fingerprint,
+            sensitive = false, chat = false, expired = false,
+        )!!
+        groups.recordIngressSuccess(rehydrated, time)
+        assertNull(groups.prepareReplay(
+            restartedScope, replayKey, time, retainUntil, fingerprint,
+            sensitive = false, chat = false, expired = false,
+        ))
+    }
+
+    @Test
+    fun `replay persistence failure fails closed without recording watermark`() {
+        val storage = MemoryBlob()
+        var groups = group(storage)
+        groups.importMembership("SpringLake", id, key, select = true)
+        val scope = groups.replayScope()
+        val replayKey = "b".repeat(64)
+        val fingerprint = "a".repeat(64)
+        val time = 1_700_000_000_000L
+        val admission = groups.prepareReplay(
+            scope, replayKey, time, time + 60_000, fingerprint,
+            sensitive = false, chat = false, expired = false,
+        )!!
+
+        storage.fail = true
+        assertThrows(IllegalStateException::class.java) {
+            groups.recordIngressSuccess(admission, time)
+        }
+        assertThrows(IllegalStateException::class.java) { groups.prepareReplay(
+            scope, replayKey, time, time + 60_000, fingerprint,
+            sensitive = false, chat = false, expired = false,
+        ) }
+        storage.fail = false
+
+        groups = group(storage)
+        assertNotNull(groups.prepareReplay(
+            groups.replayScope(), replayKey, time, time + 60_000, fingerprint,
+            sensitive = false, chat = false, expired = false,
+        ))
+    }
+
+    @Test
+    fun `older prepared ingress cannot overwrite newer watermark and restart invalidates scopes`() {
+        val storage = MemoryBlob()
+        val groups = group(storage)
+        val scope = groups.replayScope()
+        val time = 1_700_000_000_000L
+        val replayKey = "b".repeat(64)
+        val fingerprint = "a".repeat(64)
+        val older = groups.prepareReplay(
+            scope, replayKey, time, time + 60_000, fingerprint,
+            sensitive = false, chat = false, expired = false,
+        )!!
+        val newer = groups.prepareReplay(
+            scope, replayKey, time + 1, time + 60_000, fingerprint,
+            sensitive = false, chat = false, expired = false,
+        )!!
+        groups.recordIngressSuccess(newer, time)
+        assertThrows(IllegalStateException::class.java) {
+            groups.recordIngressSuccess(older, time)
+        }
+        assertThrows(IllegalStateException::class.java) {
+            groups.recordIngressSuccess(newer, time)
+        }
+        assertNull(groups.prepareReplay(
+            scope, replayKey, time, time + 60_000, fingerprint,
+            sensitive = false, chat = false, expired = false,
+        ))
+        val restarted = group(storage)
+        assertThrows(StaleReplayScope::class.java) {
+            restarted.prepareReplay(
+                scope, replayKey, time + 2, time + 60_000, fingerprint,
+                sensitive = false, chat = false, expired = false,
+            )
+        }
+    }
+
+    @Test
+    fun `full replay journal fits encrypted storage and retries admission after expiry pruning`() {
+        val storage = AtomicGroupBlobStore(File(temporaryFolder.root, "full-replay"))
+        var groups = PrivateGroups.open(storage, wrappingKey)
+        groups.importMembership("First", id, key, select = true)
+        val selected = groups.selected()
+        val time = 253402300700000L
+        val retainUntil = time + 60_000
+        val fingerprint = "a".repeat(64)
+        editState(storage) { root ->
+            val replay = JSONArray()
+            repeat(8192) { index ->
+                replay.put(JSONObject()
+                    .put("group", selected)
+                    .put("key", index.toString(16).padStart(64, '0'))
+                    .put("time", time)
+                    .put("retainUntil", retainUntil)
+                    .put("fingerprint", fingerprint))
+            }
+            root.put("replay", replay)
+        }
+        assertTrue(storage.read()!!.size <= 2 * 1024 * 1024)
+        groups = PrivateGroups.open(storage, wrappingKey)
+        val scope = groups.replayScope()
+        val update = groups.prepareReplay(
+            scope, "0".repeat(64), time + 1, retainUntil, fingerprint,
+            sensitive = false, chat = false, expired = false,
+        )!!
+        groups.recordIngressSuccess(update, time)
+        val admission = groups.prepareReplay(
+            scope, "f".repeat(64), time, retainUntil, fingerprint,
+            sensitive = false, chat = false, expired = false,
+        )!!
+        val before = storage.read()!!
+        assertThrows(IllegalStateException::class.java) {
+            groups.recordIngressSuccess(admission, time)
+        }
+        assertArrayEquals(before, storage.read())
+        groups.recordIngressSuccess(admission, retainUntil + 1)
+        assertThrows(IllegalStateException::class.java) {
+            groups.recordIngressSuccess(admission, retainUntil + 1)
+        }
+        val restarted = PrivateGroups.open(storage, wrappingKey)
+        assertNull(restarted.prepareReplay(
+            restarted.replayScope(), "f".repeat(64), time, retainUntil, fingerprint,
+            sensitive = false, chat = true, expired = false,
+        ))
     }
 
     @Test
@@ -423,7 +613,9 @@ class PrivateGroupsTest {
         decrypt.init(Cipher.DECRYPT_MODE, wrappingKey, GCMParameterSpec(128, bytes.copyOfRange(1, 13)))
         decrypt.updateAAD("weartak-ditto-group-state-v1".toByteArray())
         val root = JSONObject(String(decrypt.doFinal(bytes.copyOfRange(13, bytes.size))))
-        root.put("version", 2).put("locked", true).remove("generation")
+        root.put("version", 2).put("locked", true)
+        root.remove("generation")
+        root.remove("replay")
         val encrypt = Cipher.getInstance("AES/GCM/NoPadding")
         encrypt.init(Cipher.ENCRYPT_MODE, wrappingKey)
         encrypt.updateAAD("weartak-ditto-group-state-v1".toByteArray())
@@ -438,7 +630,37 @@ class PrivateGroupsTest {
         decrypt.init(Cipher.DECRYPT_MODE, wrappingKey, GCMParameterSpec(128, updated.copyOfRange(1, 13)))
         decrypt.updateAAD("weartak-ditto-group-state-v1".toByteArray())
         val migratedRoot = JSONObject(String(decrypt.doFinal(updated.copyOfRange(13, updated.size))))
-        assertEquals(3, migratedRoot.getInt("version"))
+        assertEquals(4, migratedRoot.getInt("version"))
         assertEquals(2L, migratedRoot.getJSONArray("groups").getJSONObject(0).getLong("sent"))
+    }
+
+    @Test
+    fun `version three state migrates to encrypted replay journal`() {
+        val storage = MemoryBlob()
+        val original = group(storage)
+        original.importMembership("SpringLake", id, key, select = true)
+
+        val bytes = storage.bytes!!
+        val decrypt = Cipher.getInstance("AES/GCM/NoPadding")
+        decrypt.init(Cipher.DECRYPT_MODE, wrappingKey, GCMParameterSpec(128, bytes.copyOfRange(1, 13)))
+        decrypt.updateAAD("weartak-ditto-group-state-v1".toByteArray())
+        val root = JSONObject(String(decrypt.doFinal(bytes.copyOfRange(13, bytes.size))))
+        root.put("version", 3).remove("replay")
+        val encrypt = Cipher.getInstance("AES/GCM/NoPadding")
+        encrypt.init(Cipher.ENCRYPT_MODE, wrappingKey)
+        encrypt.updateAAD("weartak-ditto-group-state-v1".toByteArray())
+        storage.bytes = byteArrayOf(1) + encrypt.iv + encrypt.doFinal(root.toString().toByteArray())
+
+        val migrated = group(storage)
+        assertEquals(original.selected(), migrated.selected())
+        val migratedBytes = storage.bytes!!
+        decrypt.init(
+            Cipher.DECRYPT_MODE, wrappingKey,
+            GCMParameterSpec(128, migratedBytes.copyOfRange(1, 13)),
+        )
+        decrypt.updateAAD("weartak-ditto-group-state-v1".toByteArray())
+        val migratedRoot = JSONObject(String(decrypt.doFinal(migratedBytes.copyOfRange(13, migratedBytes.size))))
+        assertEquals(4, migratedRoot.getInt("version"))
+        assertEquals(0, migratedRoot.getJSONArray("replay").length())
     }
 }

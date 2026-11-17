@@ -13,6 +13,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import com.weartak.plugin.ditto.group.GroupControls
 import com.weartak.plugin.ditto.group.GroupOption
@@ -31,6 +32,11 @@ class GroupActivity : Activity() {
     private lateinit var createButton: Button
     private lateinit var importButton: Button
     private lateinit var exportButton: Button
+    private lateinit var meshToggle: Switch
+    private lateinit var meshPermissionStatus: TextView
+    private val meshPermissionGate by lazy {
+        MeshPermissionGate(DittoMeshPermissionProbe(applicationContext))
+    }
     private var pendingImportName: String? = null
     private var waitingForExport: String? = null
     private var selectedGroup: String? = null
@@ -51,6 +57,18 @@ class GroupActivity : Activity() {
         }
         content.addView(text(R.string.group_title).apply { textSize = 20f })
         content.addView(text(R.string.group_inactive_notice))
+        meshToggle = Switch(this).apply {
+            setText(R.string.mesh_permission_opt_in)
+            setOnCheckedChangeListener { _, checked ->
+                if (checked) requestMeshPermissions() else {
+                    meshPermissionGate.disable()
+                    meshPermissionStatus.setText(R.string.mesh_permission_opted_out)
+                }
+            }
+        }
+        content.addView(meshToggle)
+        meshPermissionStatus = text(R.string.mesh_permission_inactive)
+        content.addView(meshPermissionStatus)
         status = text(R.string.group_loading)
         content.addView(status)
         options = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -81,6 +99,53 @@ class GroupActivity : Activity() {
         content.addView(exportButton)
         setContentView(ScrollView(this).apply { addView(content) })
         runOperation { Unit }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::meshToggle.isInitialized && meshToggle.isChecked &&
+            !meshPermissionGate.isRequestInFlight
+        ) {
+            renderMeshPermissionState(meshPermissionGate.refresh())
+        }
+    }
+
+    private fun requestMeshPermissions() {
+        val missing = meshPermissionGate.beginEnable() ?: return
+        if (missing.isEmpty()) {
+            renderMeshPermissionState(meshPermissionGate.refresh())
+            return
+        }
+        meshToggle.isEnabled = false
+        try {
+            @Suppress("DEPRECATION")
+            requestPermissions(missing.toTypedArray(), REQUEST_MESH_PERMISSIONS)
+        } catch (_: SecurityException) {
+            meshToggle.isEnabled = true
+            renderMeshPermissionState(meshPermissionGate.completeRequest())
+            meshPermissionStatus.setText(R.string.mesh_permission_request_error)
+        }
+    }
+
+    @Deprecated("Android permission result callback")
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_MESH_PERMISSIONS) return
+        meshToggle.isEnabled = true
+        renderMeshPermissionState(meshPermissionGate.completeRequest())
+    }
+
+    private fun renderMeshPermissionState(snapshot: MeshPermissionSnapshot) {
+        if (meshToggle.isChecked != snapshot.optedIn) meshToggle.isChecked = snapshot.optedIn
+        meshPermissionStatus.setText(when {
+            snapshot.optedIn -> R.string.mesh_permission_ready_inactive
+            snapshot.missing.isNotEmpty() -> R.string.mesh_permission_missing
+            else -> R.string.mesh_permission_inactive
+        })
     }
 
     private fun confirmExport() {
@@ -263,5 +328,6 @@ class GroupActivity : Activity() {
     companion object {
         private const val REQUEST_INVITATION = 100
         private const val REQUEST_EXPORT = 101
+        private const val REQUEST_MESH_PERMISSIONS = 102
     }
 }
