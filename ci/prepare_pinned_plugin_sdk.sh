@@ -3,7 +3,7 @@ set -eu
 
 PROJECT_ROOT="${CI_PROJECT_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
 CORE_BUILDER_COMMIT="00290203f9a6bb09870c53f2cdac0e110ed88125"
-HOST_SERVICES_SDK_COMMIT="07d8649559dee44543f82cd1895c726fd904e64f"
+HOST_SERVICES_SDK_COMMIT="cbe74590547bab276e6afa0ae3904cc37fcf1507"
 CORE_REPOSITORY="https://git.tak.gov/core/weartak-core/wearos-tak-civ.git"
 
 if [ "${CI:-}" = "true" ] && [ -z "${CI_JOB_TOKEN:-}" ]; then
@@ -109,7 +109,7 @@ HOST_CLASSES_DIR="$WORK_ROOT/host-sdk-classes"
 mkdir -p "$HOST_CLASSES_DIR"
 (cd "$HOST_CLASSES_DIR" && jar xf "$HOST_SOURCE_AAR" classes.jar)
 HOST_CLASSES_SHA="$(sha256sum "$HOST_CLASSES_DIR/classes.jar" | awk '{print $1}')"
-[ "$HOST_CLASSES_SHA" = "11a9a3d926b5bd27a63e304ae350d7f44c31f74a745bad294edd86eb6238a10a" ] || {
+[ "$HOST_CLASSES_SHA" = "7aa37dfec4731f343e3d727385608b1645f8ff15541af3eef69cc8bf2a2ba1a3" ] || {
     echo "Unexpected host-services SDK contract classes" >&2; exit 1;
 }
 HOST_SOURCE_SHA="$(sha256sum "$HOST_SOURCE_AAR" | awk '{print $1}')"
