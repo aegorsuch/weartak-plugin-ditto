@@ -186,17 +186,17 @@ necessarily include this source change.
 
 ## Developer Notes
 
-The core currently uses Ditto `4.14.6`. The plugin now includes that licensed SDK as a
+The core baseline uses Ditto `4.14.6`. The plugin includes Ditto `4.14.7` as a
 production dependency, and the APK packages the SDK-backed runtime handle plus
 `app/src/main/assets/licenses/ditto-binary-license.txt`. The production binder uses a
 fail-closed runtime owner with no factory and a closed activation gate, so it creates no
 Ditto instance, reads no identity, configures no transport, and publishes no data.
 The SDK-declared mesh and network permissions remain in the merged app manifest.
 The group screen has an explicit permission opt-in and requests only permissions
-reported missing by Ditto 4.14.6; grants and revocations are rechecked after the
+reported missing by Ditto 4.14.7; grants and revocations are rechecked after the
 permission result and on resume. This is permission handling only: no Ditto instance
 or sync starts, and runtime identity/ownership gates remain closed. The SDK-backed
-handle is compiled against Ditto `4.14.6`; unit tests exclude the vendor artifact at
+handle is compiled against Ditto `4.14.7`; unit tests exclude the vendor artifact at
 runtime and use only a synthetic test double. Device installation, SDK class loading,
 permission UX and radio behavior have not been verified. Core retains its existing
 Ditto runtime.
@@ -205,7 +205,7 @@ and hosted UI. It does not provide a native Ditto document/store,
 point-ledger, PDL migration, or host-owned mesh-runtime contract.
 
 The SDK-backed factory requires explicit SharedKey provisioning and uses the public
-identity-based constructor supported by Ditto `4.14.6`. That API derives configuration
+identity-based constructor supported by Ditto `4.14.7`. That API derives configuration
 from the identity; exact parity with the core's database and connect settings remains
 unverified, so the factory is not wired into the production binder. Its handle delegates
 `stopSync()` and `close()` only for an explicitly supplied Ditto instance; the service
@@ -245,7 +245,7 @@ observations: core derives Wi-Fi and validated internet from Android network
 capabilities. Wi-Fi Direct is not treated as Wi-Fi Aware. Missing observations
 must not be silently treated as known values; no network callback or SDK transport
 configuration is connected here. A separate SDK transport-config adapter compiles
-against Ditto 4.14.6 and is exercised against a synthetic test double; like the stop
+against Ditto 4.14.7 and is exercised against a synthetic test double; like the stop
 bridge, it is excluded from the APK and cannot start or configure a live runtime.
 
 Local group groundwork stores a single Community/private selection and memberships

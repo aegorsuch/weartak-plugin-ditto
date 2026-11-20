@@ -9,6 +9,7 @@ import java.util.Base64
 import java.util.zip.ZipFile
 import org.gradle.BuildAdapter
 import org.gradle.BuildResult
+import com.weartak.version.WearVersion
 
 plugins {
     id("com.android.application")
@@ -53,6 +54,8 @@ if (providers.environmentVariable("CI").isPresent && releaseBuildRequested) {
         throw GradleException("CI release builds must request verifyReleaseSigning.")
     }
 }
+
+val wearVersion = WearVersion.resolve(rootDir.toPath(), System.getenv(), releaseSigningConfigured)
 
 val sdkPath = providers.gradleProperty("weartakPluginSdkAar").orNull
     ?: throw GradleException("Set -PweartakPluginSdkAar to the verified combined WearTAK SDK AAR.")
@@ -191,8 +194,8 @@ android {
         applicationId = "com.weartak.plugin.ditto"
         minSdk = 30
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0-dev"
+        versionCode = wearVersion.code
+        versionName = wearVersion.name
     }
 
     compileOptions {
@@ -247,10 +250,10 @@ val dittoTestFakeJar by tasks.registering(Jar::class) {
 dependencies {
     implementation(files(sdkFile))
     implementation(files(hostServicesSdkFile))
-    implementation("live.ditto:ditto:4.14.6")
+    implementation("live.ditto:ditto:4.14.7")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
-    testCompileOnly("live.ditto:ditto:4.14.6")
+    testCompileOnly("live.ditto:ditto:4.14.7")
     testRuntimeOnly(files(dittoTestFakeJar))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
