@@ -3,11 +3,16 @@
     <permission
         android:name="com.weartak.plugin.permission.BIND_PLUGIN"
         android:protectionLevel="signature" />
+    <permission
+        android:name="com.weartak.plugin.ditto.permission.BIND_TRACKER_DITTO_V1"
+        android:knownCerts="@string/tracker_release_signer_sha256"
+        android:protectionLevel="signature|knownSigner" />
 
     <uses-feature android:name="android.hardware.type.watch" android:required="true" />
 
     <queries>
         <package android:name="com.aitech.weartak_civ" />
+        <package android:name="com.tak.weartak_tracker" />
     </queries>
 
     <application
@@ -34,5 +39,10 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </service>
+        <service
+            android:name=".tracker.TrackerDittoServiceV1"
+            android:enabled="false"
+            android:exported="false"
+            android:permission="com.weartak.plugin.ditto.permission.BIND_TRACKER_DITTO_V1" />
     </application>
 </manifest>

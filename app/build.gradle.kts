@@ -90,7 +90,7 @@ if (!File(hostServicesSdkPath).isAbsolute || !hostServicesSdkFile.isFile) {
 val approvedHostServicesSdkEntryHashes = mapOf(
     "AndroidManifest.xml" to "2a76559914cc535daaa2f9f486351ff47f1436f5d2f11c86fc9c2985957d8caf",
     "R.txt" to "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "classes.jar" to "11a9a3d926b5bd27a63e304ae350d7f44c31f74a745bad294edd86eb6238a10a",
+    "classes.jar" to "7aa37dfec4731f343e3d727385608b1645f8ff15541af3eef69cc8bf2a2ba1a3",
     "proguard.txt" to "0834f3b925448c7fca332d58dd50cbf73e30ba0199bfce3dd39a638a88f6b05d",
     "META-INF/com/android/build/gradle/aar-metadata.properties" to
         "9cc8517bbdf06d879f57a2cfd6f8c6914e48800d443421cd850971945f98e7b2",

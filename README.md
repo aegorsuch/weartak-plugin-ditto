@@ -25,8 +25,8 @@ included or loaded, and the runtime stays disabled until provisioning and safe o
 handoff are implemented.
 
 The plugin consumes Community contract v1 from the [WearTAK host-services SDK
-module](https://git.tak.gov/core/weartak-core/wearos-tak-civ/-/tree/07d8649559dee44543f82cd1895c726fd904e64f/weartak-plugin-host-services-sdk)
-at core commit `07d8649559dee44543f82cd1895c726fd904e64f`; source and license notices
+module](https://git.tak.gov/core/weartak-core/wearos-tak-civ/-/tree/cbe74590547bab276e6afa0ae3904cc37fcf1507/weartak-plugin-host-services-sdk)
+at core commit `cbe74590547bab276e6afa0ae3904cc37fcf1507`; source and license notices
 remain in core, and no SDK binary is vendored. CI fetches the pinned SDK module and
 version catalog using the scoped job token, builds its release AAR with Gradle 8.14.5,
 and checks its contents against pinned SHA-256 digests before use. Synthetic tests
@@ -35,6 +35,15 @@ Production reads remain disabled, and the client does not retain or deliver an
 identity. Capability discovery is not provisioning or proof of host process identity,
 exclusive runtime ownership, or a safe handoff. Ownership and recovery fencing,
 migration and device validation remain required.
+
+Tracker host authentication has a local prerequisite check for Android 12 (API 31)
+and later: the Binder caller's UID must belong exclusively to
+`com.tak.weartak_tracker` and match its current release signing certificate. The
+SDK-backed discovery adapter reports v1 as unavailable with no ownership
+interface. The explicit Tracker service is declared disabled and non-exported;
+platform validation of its separate signature-level permission is required
+before exposing it. Android 11
+(API 30) keeps Tracker's bundled Ditto. The existing Wear OS endpoint is unchanged.
 
 ## Point of Contacts
 
@@ -64,7 +73,7 @@ per variant; CI artifact paths and release signing checks are unchanged.
 The SDK AARs are not included. On Windows, the following obtains only the required
 tracked build inputs from canonical core commits
 `00290203f9a6bb09870c53f2cdac0e110ed88125` and
-`07d8649559dee44543f82cd1895c726fd904e64f` into a temporary directory, then builds
+`cbe74590547bab276e6afa0ae3904cc37fcf1507` into a temporary directory, then builds
 both SDKs. It requires read access to
 [TAK.gov core](https://git.tak.gov/core/weartak-core/wearos-tak-civ),
 [GitHub SDK source](https://github.com/aegorsuch/weartak-plugin-sdk), Git, Python 3,
@@ -109,7 +118,7 @@ $aar = Join-Path $root '.gradle\sdk\86bdc8b04797-a818af15b332\build\outputs\aar\
 if ((Get-FileHash $aar -Algorithm SHA256).Hash -ne '6ec84b18e1c8ac6b4be727083c4ea7a572150b521384270212434c239e5a1e0b') {
     throw 'Unexpected SDK AAR hash.'
 }
-$hostCommit = '07d8649559dee44543f82cd1895c726fd904e64f'
+$hostCommit = 'cbe74590547bab276e6afa0ae3904cc37fcf1507'
 Invoke-CheckedGit -C $root fetch --quiet --depth=1 --filter=blob:none origin $hostCommit
 foreach ($object in @('gradle/libs.versions.toml', 'weartak-plugin-host-services-sdk')) {
     Invoke-CheckedGit -C $root cat-file -e "${hostCommit}:$object"
@@ -162,7 +171,7 @@ Do not commit the AAR, vendor binaries, credentials, signing keys, Ditto identit
 TAK.gov CI runs a debug build and debug/release unit tests on branch,
 merge-request, and tag pipelines without production signing credentials. It builds
 both SDK AARs from pinned core inputs, including host-services SDK commit
-`07d8649559dee44543f82cd1895c726fd904e64f`, using `CI_JOB_TOKEN`; the core project
+`cbe74590547bab276e6afa0ae3904cc37fcf1507`, using `CI_JOB_TOKEN`; the core project
 must allow this plugin project in its job-token scope. CI downloads the official Gradle
 8.14.5 binary distribution and checks its SHA-256 against the
 [Gradle-published checksum](https://services.gradle.org/distributions/gradle-8.14.5-bin.zip.sha256).
