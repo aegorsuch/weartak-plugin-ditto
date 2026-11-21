@@ -155,6 +155,10 @@ plugin project’s authorized CI to receive the protected variables, run
 `:app:verifyReleaseSigning`, and produce a signer Android accepts as matching the
 installed core. The core must also hold `com.weartak.plugin.permission.BIND_PLUGIN`;
 the plugin enforces this signature permission on both its service and group activity.
+Because another installed plugin may own this shared permission, Ditto declares
+visibility for packages advertising `com.weartak.plugin.action.PLUGIN_SERVICE`.
+This lets the signer check inspect the permission owner when it also advertises that
+service action, without requesting `QUERY_ALL_PACKAGES`.
 
 The [core builder](https://git.tak.gov/core/weartak-core/wearos-tak-civ/-/blob/00290203f9a6bb09870c53f2cdac0e110ed88125/ci/build_plugin_sdk.py)
 verifies SDK commit `86bdc8b04797c2cf6caa30e78e796abac1c2a330`, tree

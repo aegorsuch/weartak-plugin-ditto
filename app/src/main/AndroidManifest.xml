@@ -13,6 +13,9 @@
     <queries>
         <package android:name="com.aitech.weartak_civ" />
         <package android:name="com.tak.weartak_tracker" />
+        <intent>
+            <action android:name="com.weartak.plugin.action.PLUGIN_SERVICE" />
+        </intent>
     </queries>
 
     <application
